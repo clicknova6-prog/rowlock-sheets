@@ -1,0 +1,99 @@
+# Firebase App Hosting runs this Next.js custom server through `npm run start`.
+# Keep maxInstances at 1 until Socket.io broadcasts are moved to Redis/Firestore pub-sub.
+runConfig:
+  cpu: 1
+  memoryMiB: 1024
+  concurrency: 200
+  minInstances: 0
+  maxInstances: 1
+
+env:
+  - variable: NODE_ENV
+    value: production
+    availability:
+      - BUILD
+      - RUNTIME
+  - variable: SKIP_AUTH
+    value: "false"
+    availability:
+      - BUILD
+      - RUNTIME
+  - variable: DB_CONNECTION_LIMIT
+    value: "5"
+    availability:
+      - RUNTIME
+  - variable: DB_CONNECT_TIMEOUT_MS
+    value: "15000"
+    availability:
+      - RUNTIME
+  - variable: DB_ACQUIRE_TIMEOUT_MS
+    value: "15000"
+    availability:
+      - RUNTIME
+  - variable: DB_IDLE_TIMEOUT_SECONDS
+    value: "60"
+    availability:
+      - RUNTIME
+  - variable: NEXT_PUBLIC_APP_URL
+    value: "https://rowlock-sheets--jobsheet-291c1.us-central1.hosted.app"
+    availability:
+      - BUILD
+      - RUNTIME
+  - variable: FIREBASE_PROJECT_ID
+    value: "jobsheet-291c1"
+    availability:
+      - BUILD
+      - RUNTIME
+  - variable: FIREBASE_ADMIN_EMAILS
+    value: "clicknova6@gmail.com"
+    availability:
+      - RUNTIME
+  - variable: NEXT_PUBLIC_FIREBASE_API_KEY
+    value: "AIzaSyCB7HaYIwkx643uavT-QqLGv3QVGSSNgw4"
+    availability:
+      - BUILD
+      - RUNTIME
+  - variable: NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN
+    value: "jobsheet-291c1.firebaseapp.com"
+    availability:
+      - BUILD
+      - RUNTIME
+  - variable: NEXT_PUBLIC_FIREBASE_PROJECT_ID
+    value: "jobsheet-291c1"
+    availability:
+      - BUILD
+      - RUNTIME
+  - variable: NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET
+    value: "jobsheet-291c1.firebasestorage.app"
+    availability:
+      - BUILD
+      - RUNTIME
+  - variable: NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID
+    value: "1077235869527"
+    availability:
+      - BUILD
+      - RUNTIME
+  - variable: NEXT_PUBLIC_FIREBASE_APP_ID
+    value: "1:1077235869527:web:c8c6654d135d55c2df8012"
+    availability:
+      - BUILD
+      - RUNTIME
+  - variable: NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID
+    value: "G-J1T8T00Y3E"
+    availability:
+      - BUILD
+      - RUNTIME
+  - variable: SOCKET_CORS_ORIGIN
+    value: "https://rowlock-sheets--jobsheet-291c1.us-central1.hosted.app"
+    availability:
+      - RUNTIME
+  - variable: DATABASE_URL
+    secret: DATABASE_URL
+    availability:
+      - BUILD
+      - RUNTIME
+  - variable: AUTH_SECRET
+    secret: AUTH_SECRET
+    availability:
+      - BUILD
+      - RUNTIME

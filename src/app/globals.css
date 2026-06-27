@@ -1,0 +1,184 @@
+@import "react-data-grid/lib/styles.css";
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light;
+  --app-bg: #f5f7fb;
+  --panel: #ffffff;
+  --panel-muted: #eef2f7;
+  --line: #d7dee9;
+  --text: #101827;
+  --text-muted: #5d6b82;
+  --accent: #0f766e;
+  --accent-strong: #115e59;
+  --warning: #b45309;
+  --danger: #be123c;
+  --grid-bg: #ffffff;
+  --grid-line: #c3cedd;
+  --grid-line-strong: #9aa9bc;
+}
+
+.dark {
+  color-scheme: dark;
+  --app-bg: #111318;
+  --panel: #181c23;
+  --panel-muted: #232a34;
+  --line: #334155;
+  --text: #f8fafc;
+  --text-muted: #a7b2c2;
+  --accent: #2dd4bf;
+  --accent-strong: #5eead4;
+  --warning: #f59e0b;
+  --danger: #fb7185;
+  --grid-bg: #111827;
+  --grid-line: #3f4b5f;
+  --grid-line-strong: #66758b;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  min-height: 100vh;
+  margin: 0;
+  background: var(--app-bg);
+  color: var(--text);
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+.rdg {
+  --rdg-background-color: var(--grid-bg);
+  --rdg-header-background-color: var(--panel-muted);
+  --rdg-row-hover-background-color: rgba(20, 184, 166, 0.08);
+  --rdg-color: var(--text);
+  --rdg-border-color: var(--line);
+  --rdg-border-width: 1px;
+  --rdg-selection-color: var(--accent);
+  border-radius: 8px;
+  border-color: var(--grid-line-strong);
+  min-height: 680px;
+}
+
+.rdg-cell {
+  border-inline-end: 1px solid var(--grid-line);
+  border-block-end: 1px solid var(--grid-line);
+  outline-offset: -2px;
+  user-select: none;
+}
+
+.rdg [role="columnheader"] {
+  border-block-end-color: var(--grid-line-strong);
+  border-inline-end-color: var(--grid-line-strong);
+}
+
+.sheet-cell {
+  display: flex;
+  align-items: flex-start;
+  min-width: 0;
+  padding-block: 4px;
+}
+
+.sheet-cell > div,
+.sheet-cell-content {
+  flex: 1 1 auto;
+  width: 100%;
+  min-height: 100%;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  line-height: 1.35;
+}
+
+.sheet-range-selecting {
+  cursor: cell;
+}
+
+.sheet-range-selecting .rdg-cell {
+  cursor: cell;
+}
+
+.sheet-cell-range-selected {
+  position: relative;
+}
+
+.sheet-cell-range-selected::after {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  content: "";
+  background: rgba(20, 184, 166, 0.14);
+  outline: 1px solid rgba(20, 184, 166, 0.48);
+  outline-offset: -1px;
+}
+
+.sheet-cell-range-anchor::after {
+  background: rgba(20, 184, 166, 0.18);
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.rdg-cell input,
+.rdg-cell textarea {
+  user-select: text;
+}
+
+.sheet-cell-locked {
+  background: rgba(148, 163, 184, 0.13);
+  color: var(--text-muted);
+}
+
+.sheet-cell-owned {
+  box-shadow: inset 3px 0 0 rgba(20, 184, 166, 0.55);
+}
+
+.sheet-cell-formula {
+  background: rgba(245, 158, 11, 0.13);
+}
+
+.sheet-cell-live-locked {
+  box-shadow: inset 0 3px 0 var(--sheet-lock-color, var(--accent));
+}
+
+.sheet-cell-live-locked .sheet-cell-content {
+  box-shadow: inset 0 3px 0 var(--sheet-lock-color, var(--accent));
+}
+
+.sheet-cell-lock-badge {
+  float: right;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.35rem;
+  height: 1.35rem;
+  margin-left: 0.35rem;
+  border-radius: 999px;
+  color: #ffffff;
+  font-size: 0.62rem;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.sheet-row-index {
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.focus-ring {
+  outline: 2px solid transparent;
+  outline-offset: 2px;
+}
+
+.focus-ring:focus-visible {
+  outline-color: var(--accent);
+}

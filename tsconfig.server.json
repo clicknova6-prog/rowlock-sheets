@@ -1,0 +1,27 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "allowImportingTsExtensions": false,
+    "declaration": false,
+    "incremental": false,
+    "lib": ["es2022", "dom"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "noEmit": false,
+    "outDir": ".server",
+    "rootDir": ".",
+    "sourceMap": false
+  },
+  "include": [
+    "server.ts",
+    "src/generated/prisma/**/*.ts",
+    "src/lib/**/*.ts"
+  ],
+  "exclude": [
+    ".next",
+    ".server",
+    "node_modules",
+    "**/*.test.ts",
+    "**/*.test.tsx"
+  ]
+}

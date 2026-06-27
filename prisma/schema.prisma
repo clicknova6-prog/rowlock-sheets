@@ -1,0 +1,235 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Get a free hosted Postgres database in seconds: `npx create-db`
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "mysql"
+}
+
+enum Role {
+  ADMIN
+  MEMBER
+}
+
+enum RuleOperator {
+  EQUALS
+  IN_LIST
+  CONTAINS
+  EMPTY
+  NOT_EMPTY
+}
+
+enum AuditAction {
+  CELL_UPDATED
+  CELL_FORMAT_UPDATED
+  ROW_CLAIMED
+  ROW_UNLOCKED
+  COLUMN_PERMISSION_UPDATED
+  VALIDATION_RULE_UPDATED
+  CONDITIONAL_RULE_UPDATED
+  SHEET_VIEW_UPDATED
+  USER_SIGNED_IN
+}
+
+model User {
+  id           String    @id @default(cuid())
+  email        String    @unique
+  name         String
+  passwordHash String
+  role         Role      @default(MEMBER)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  createdSheets Sheet[]        @relation("SheetCreator")
+  updatedCells   Cell[]         @relation("CellUpdatedBy")
+  ownedRows      RowOwnership[] @relation("RowOwner")
+  editedRows     SheetRow[]     @relation("RowLastEditedBy")
+  auditLogs      AuditLog[]     @relation("AuditActor")
+}
+
+model Sheet {
+  id        String   @id @default(cuid())
+  name      String
+  createdById String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  createdBy         User?             @relation("SheetCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  rows              SheetRow[]
+  cells             Cell[]
+  columnPermissions ColumnPermission[]
+  rowOwnerships     RowOwnership[]
+  validationRules   ValidationRule[]
+  conditionalRules  ConditionalRule[]
+  cellFormats       CellFormat[]
+  viewSetting       SheetViewSetting?
+  auditLogs         AuditLog[]
+}
+
+model SheetRow {
+  id             String   @id @default(cuid())
+  sheetId        String
+  rowIndex       Int
+  lastEditedById String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  sheet        Sheet @relation(fields: [sheetId], references: [id], onDelete: Cascade)
+  lastEditedBy User? @relation("RowLastEditedBy", fields: [lastEditedById], references: [id], onDelete: SetNull)
+
+  @@unique([sheetId, rowIndex])
+  @@index([sheetId])
+}
+
+model Cell {
+  id            String   @id @default(cuid())
+  sheetId       String
+  rowIndex      Int
+  columnKey     String   @db.VarChar(1)
+  value         String   @db.Text
+  formula       String?  @db.Text
+  computedValue String?  @db.Text
+  lockedBy      String?
+  updatedById   String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  sheet     Sheet @relation(fields: [sheetId], references: [id], onDelete: Cascade)
+  updatedBy User? @relation("CellUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+
+  @@unique([sheetId, rowIndex, columnKey])
+  @@index([sheetId, rowIndex])
+  @@index([sheetId, columnKey])
+  @@index([lockedBy])
+}
+
+model CellFormat {
+  id              String   @id @default(cuid())
+  sheetId         String
+  rowIndex        Int
+  columnKey       String   @db.VarChar(1)
+  bold            Boolean  @default(false)
+  italic          Boolean  @default(false)
+  underline       Boolean  @default(false)
+  textColor       String?  @db.VarChar(20)
+  backgroundColor String?  @db.VarChar(20)
+  horizontalAlign String?  @db.VarChar(10)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  sheet Sheet @relation(fields: [sheetId], references: [id], onDelete: Cascade)
+
+  @@unique([sheetId, rowIndex, columnKey])
+  @@index([sheetId, rowIndex])
+  @@index([sheetId, columnKey])
+}
+
+model SheetViewSetting {
+  id                 String   @id @default(cuid())
+  sheetId            String   @unique
+  alternateRowColors Boolean  @default(false)
+  alternateOddColor  String   @default("#ffffff") @db.VarChar(20)
+  alternateEvenColor String   @default("#f8fafc") @db.VarChar(20)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  sheet Sheet @relation(fields: [sheetId], references: [id], onDelete: Cascade)
+}
+
+model ColumnPermission {
+  id               String   @id @default(cuid())
+  sheetId          String
+  columnKey        String   @db.VarChar(1)
+  editableByMember Boolean  @default(false)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  sheet Sheet @relation(fields: [sheetId], references: [id], onDelete: Cascade)
+
+  @@unique([sheetId, columnKey])
+  @@index([sheetId])
+}
+
+model RowOwnership {
+  id        String   @id @default(cuid())
+  sheetId   String
+  rowIndex  Int
+  ownerId   String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  sheet Sheet @relation(fields: [sheetId], references: [id], onDelete: Cascade)
+  owner User  @relation("RowOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+
+  @@unique([sheetId, rowIndex])
+  @@index([ownerId])
+}
+
+model ValidationRule {
+  id            String   @id @default(cuid())
+  sheetId       String
+  columnKey     String   @db.VarChar(1)
+  name          String
+  allowedValues Json
+  enabled       Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  sheet Sheet @relation(fields: [sheetId], references: [id], onDelete: Cascade)
+
+  @@index([sheetId, columnKey])
+}
+
+model ConditionalRule {
+  id          String   @id @default(cuid())
+  sheetId     String
+  name        String
+  description String?  @db.Text
+  limitCount  Int
+  enabled     Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  sheet      Sheet           @relation(fields: [sheetId], references: [id], onDelete: Cascade)
+  conditions RuleCondition[]
+
+  @@index([sheetId])
+}
+
+model RuleCondition {
+  id        String       @id @default(cuid())
+  ruleId    String
+  columnKey String       @db.VarChar(1)
+  operator  RuleOperator
+  values    Json?
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+
+  rule ConditionalRule @relation(fields: [ruleId], references: [id], onDelete: Cascade)
+
+  @@index([ruleId])
+}
+
+model AuditLog {
+  id        String      @id @default(cuid())
+  sheetId   String
+  actorId   String?
+  action    AuditAction
+  rowIndex  Int?
+  columnKey String?     @db.VarChar(1)
+  message   String      @db.Text
+  metadata  Json?
+  createdAt DateTime    @default(now())
+
+  sheet Sheet @relation(fields: [sheetId], references: [id], onDelete: Cascade)
+  actor User? @relation("AuditActor", fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([sheetId, createdAt])
+  @@index([actorId])
+}

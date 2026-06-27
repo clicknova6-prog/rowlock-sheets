@@ -1,0 +1,56 @@
+rules_version = '2';
+
+// ===============================================================
+// Assumed Data Model
+// ===============================================================
+//
+// Collection: users
+// Document ID: Firebase Auth uid
+// Fields:
+//   - email: string, required, private PII, server-managed
+//   - name: string, required, server-managed
+//   - role: "ADMIN" | "MEMBER", required, server-managed
+//   - createdAt: timestamp, optional, server-managed
+//   - updatedAt: timestamp, optional, server-managed
+//
+// Collection: sheets
+// Status: reserved for the future spreadsheet Firestore migration.
+// Direct client access is denied until the data model is complete.
+//
+// Current app access pattern:
+//   - Firebase Auth signs users in.
+//   - The Next.js server uses Firebase Admin SDK to create/update users.
+//   - Clients may read only their own user profile.
+//   - Admin users may read user profiles for admin UX.
+//   - No client may create/update/delete user profiles or sheet data directly.
+//
+// ===============================================================
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function userProfile() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid));
+    }
+
+    function isAdmin() {
+      return signedIn() && userProfile().data.role == "ADMIN";
+    }
+
+    match /users/{userId} {
+      allow read: if signedIn() && (request.auth.uid == userId || isAdmin());
+      allow create, update, delete: if false;
+    }
+
+    match /sheets/{sheetId}/{document=**} {
+      allow read, write: if false;
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
