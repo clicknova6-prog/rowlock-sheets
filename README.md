@@ -48,11 +48,13 @@ AUTH_SECRET="replace-with-at-least-32-random-characters"
 NEXT_PUBLIC_APP_URL="https://your-domain.com"
 DB_CONNECTION_LIMIT="5"
 SOCKET_CORS_ORIGIN="https://your-domain.com"
+NEXT_PUBLIC_ENABLE_SOCKET_SYNC="true"
 ```
 
 `AUTH_SECRET` signs session cookies. Change it before production.
 `DB_CONNECTION_LIMIT` should stay above 1 because sheet saves and snapshots use multiple database operations.
 `SOCKET_CORS_ORIGIN` is optional for same-origin hosting, but set it to your production domain if Hostinger serves the app behind a domain/proxy that requires explicit Socket.io CORS.
+`NEXT_PUBLIC_ENABLE_SOCKET_SYNC` should stay `true` for local/custom-server deployments and `false` for Firebase App Hosting, where cell edits save through the REST autosave endpoint.
 
 ## Local Development
 
@@ -139,9 +141,11 @@ npx -y firebase-tools@latest deploy --only firestore --project jobsheet-291c1
 
 Firebase is the chosen deployment target. The current Firebase phase uses Firebase Authentication and Firestore user profiles while the spreadsheet engine is still being migrated from Prisma/MySQL. A later Firebase-native phase can move sheet cell storage/live sync fully into Firestore.
 
-### Why App Hosting Is Configured As One Instance
+### App Hosting Runtime Shape
 
-`apphosting.yaml` sets `maxInstances: 1`. Keep it that way until Socket.io broadcasts and edit locks are moved out of process memory. With multiple instances, two users could connect to different instances and miss live sheet events.
+Firebase App Hosting uses the framework adapter, so it does not run the custom Socket.io server entry. `apphosting.yaml` sets `NEXT_PUBLIC_ENABLE_SOCKET_SYNC=false`; hosted cell edits save through `/api/cells` autosave instead.
+
+`apphosting.yaml` currently keeps `maxInstances: 1` to control Cloud SQL cost and connection pressure while usage is being validated. You can raise it later after checking database connections and write behavior under real employee traffic.
 
 You can set `minInstances: 1` later for fewer cold starts. `minInstances: 0` keeps cost lower.
 
@@ -182,7 +186,7 @@ Then seed only if this is a brand-new empty database:
 npm run seed
 ```
 
-`npm run build` already runs `prisma generate`, `next build`, and the custom server build. `npm run start` runs the generated root `server.js`, which mounts Socket.io at `/socket.io`.
+`npm run build` already runs `prisma generate`, `next build`, and the custom server build. On Firebase App Hosting, the framework adapter serves the Next.js app and the spreadsheet uses REST autosave. On custom-server hosts, `npm run start` runs the generated root `server.js`, which mounts Socket.io at `/socket.io`.
 
 ## Hostinger Business Deployment
 
@@ -234,13 +238,14 @@ After changing environment variables, restart the Node.js app from Hostinger. Th
 
 ### WebSocket Notes
 
-- Live cell changes use one persistent Socket.io WebSocket connection per browser tab instead of repeated REST polling.
+- Local/custom-server deployments can use one persistent Socket.io WebSocket connection per browser tab instead of repeated REST polling.
+- Firebase App Hosting sets `NEXT_PUBLIC_ENABLE_SOCKET_SYNC=false`, so cell value changes use `/api/cells` REST autosave.
 - Each sheet joins a private room named `sheet:{sheetId}`.
 - The client forces the `websocket` transport and does not use Socket.io HTTP long-polling fallback.
-- Large paste operations are sent through bulk WebSocket updates in 50-cell chunks, and the server writes them with short MySQL batch upserts instead of one long Prisma transaction.
+- Large paste operations are saved in batches. Socket.io uses 50-cell chunks; hosted REST autosave uses larger API batches.
 - Pasted batches above 100 cells keep a summary audit entry instead of one audit row per cell, which keeps large imports practical on shared hosting.
-- Single-process Socket.io is intentional for the current Firebase/Hostinger deployment shape. Keep one app instance until Socket.io events are backed by Redis, Firestore, or another shared pub-sub layer.
-- REST endpoints still exist for initial page load, admin formatting, and cell history, but cell value changes after page load go through Socket.io.
+- Single-process Socket.io is intentional for local/custom-server deployments. If socket sync is enabled in production with multiple app instances, move Socket.io events to Redis, Firestore, or another shared pub-sub layer first.
+- REST endpoints handle initial page load, Firebase-hosted autosave, admin formatting, and cell history.
 
 ## Database Schema Overview
 

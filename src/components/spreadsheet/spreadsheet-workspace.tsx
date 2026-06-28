@@ -592,6 +592,7 @@ export function SpreadsheetWorkspace({
   const socketFocusCellRef = useRef<(cell: SelectedCell) => void>(() => undefined);
   const socketBlurCellRef = useRef<(cell: SelectedCell) => void>(() => undefined);
 
+  const socketSyncEnabled = !demoMode && process.env.NEXT_PUBLIC_ENABLE_SOCKET_SYNC !== "false";
   const isAdmin = snapshot.currentUser.role === Role.ADMIN;
   const selectedStartCell = getRangeStartCell(selectedRange, snapshot.columns) ?? selectedCell;
   const selectedRow = selectedCell
@@ -633,10 +634,12 @@ export function SpreadsheetWorkspace({
     error ??
     message ??
     (isSavingCells
-      ? "Syncing..."
+      ? socketSyncEnabled
+        ? "Syncing..."
+        : "Saving..."
       : pendingSaveCount > 0
-        ? `Live sync queued for ${pendingSaveCount} cell${pendingSaveCount === 1 ? "" : "s"}.`
-        : "Syncing...");
+        ? `${socketSyncEnabled ? "Live sync" : "Save"} queued for ${pendingSaveCount} cell${pendingSaveCount === 1 ? "" : "s"}.`
+        : "Ready");
   const rowHeight = useCallback(
     (row: SheetGridRow) => getResponsiveRowHeight(row, snapshot.columns),
     [snapshot.columns]
@@ -1093,7 +1096,6 @@ export function SpreadsheetWorkspace({
     });
   }, []);
 
-  const socketSyncEnabled = !demoMode && process.env.NEXT_PUBLIC_ENABLE_SOCKET_SYNC !== "false";
   const sheetSocket = useSheet({
     sheetId: snapshot.sheet.id,
     enabled: socketSyncEnabled,
@@ -1114,6 +1116,14 @@ export function SpreadsheetWorkspace({
     blurCell: socketBlurCell
   } = sheetSocket;
   const liveConnected = demoMode || (socketSyncEnabled && socketConnected);
+  const syncBadgeConnected = demoMode || !socketSyncEnabled || liveConnected;
+  const syncBadgeLabel = demoMode
+    ? "local demo"
+    : socketSyncEnabled
+      ? liveConnected
+        ? "live sync"
+        : "connecting"
+      : "autosave";
 
   useEffect(() => {
     socketConnectedRef.current = liveConnected;
@@ -1918,10 +1928,10 @@ export function SpreadsheetWorkspace({
               <span
                 className={clsx(
                   "h-2 w-2 rounded-full",
-                  liveConnected ? "bg-teal-500" : "bg-amber-500"
+                  syncBadgeConnected ? "bg-teal-500" : "bg-amber-500"
                 )}
               />
-              {liveConnected ? "live sync" : "connecting"}
+              {syncBadgeLabel}
             </span>
           </div>
         </div>
