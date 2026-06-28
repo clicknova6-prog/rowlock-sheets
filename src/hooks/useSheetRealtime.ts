@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { onAuthStateChanged } from "firebase/auth";
 import {
   collection,
   limit,
@@ -10,7 +11,7 @@ import {
   Timestamp,
   where
 } from "firebase/firestore";
-import { firebaseDb } from "@/lib/firebase/client";
+import { firebaseAuth, firebaseDb } from "@/lib/firebase/client";
 import type {
   SheetRealtimeEvent,
   SheetRealtimeEventType
@@ -68,6 +69,10 @@ export function useSheetRealtime({
   onError
 }: UseSheetRealtimeOptions): UseSheetRealtimeResult {
   const callbacksRef = useRef({ onEvent, onError });
+  const [authState, setAuthState] = useState(() => ({
+    ready: Boolean(firebaseAuth.currentUser),
+    userId: firebaseAuth.currentUser?.uid ?? null
+  }));
   const [connected, setConnected] = useState(false);
 
   useEffect(() => {
@@ -75,7 +80,16 @@ export function useSheetRealtime({
   }, [onError, onEvent]);
 
   useEffect(() => {
-    if (!enabled || !sheetId) {
+    return onAuthStateChanged(firebaseAuth, (user) => {
+      setAuthState({
+        ready: true,
+        userId: user?.uid ?? null
+      });
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!enabled || !sheetId || !authState.ready || !authState.userId) {
       return;
     }
 
@@ -115,7 +129,7 @@ export function useSheetRealtime({
       unsubscribe();
       setConnected(false);
     };
-  }, [enabled, sheetId]);
+  }, [authState.ready, authState.userId, enabled, sheetId]);
 
   return { connected };
 }
