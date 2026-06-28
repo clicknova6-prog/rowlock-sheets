@@ -17,6 +17,7 @@ import type {
   CellFormatEntryState,
   CellFormatPatch,
   CellState,
+  ColumnPermissionState,
   RowOwnershipState,
   SheetGridRow,
   SheetSnapshot
@@ -108,6 +109,40 @@ function upsertCell(cells: CellState[], editedCell: CellState): CellState[] {
   return [...lookup.values()];
 }
 
+function getDuplicateHighlightedRows(
+  cells: CellState[],
+  columnPermissions: ColumnPermissionState[]
+): Set<number> {
+  const highlightedRows = new Set<number>();
+  const cellLookup = new Map(cells.map((cell) => [getCellKey(cell.rowIndex, cell.columnKey), cell]));
+  const duplicateColumns = columnPermissions
+    .filter((permission) => permission.duplicateHighlight)
+    .map((permission) => permission.columnKey);
+
+  for (const columnKey of duplicateColumns) {
+    const valueRows = new Map<string, number[]>();
+
+    for (let rowIndex = 1; rowIndex <= MAX_ROWS; rowIndex += 1) {
+      const cell = cellLookup.get(getCellKey(rowIndex, columnKey));
+      const value = (cell?.computedValue ?? cell?.value ?? "").trim().toLowerCase();
+
+      if (!value) {
+        continue;
+      }
+
+      valueRows.set(value, [...(valueRows.get(value) ?? []), rowIndex]);
+    }
+
+    for (const rows of valueRows.values()) {
+      if (rows.length > 1) {
+        rows.forEach((rowIndex) => highlightedRows.add(rowIndex));
+      }
+    }
+  }
+
+  return highlightedRows;
+}
+
 export function getDemoCellsFromSnapshot(snapshot: SheetSnapshot): CellState[] {
   return cellsFromSnapshot(snapshot);
 }
@@ -123,6 +158,7 @@ export function buildRowsFromCells(
     formats.map((format) => [getCellKey(format.rowIndex, format.columnKey), format])
   );
   const ownershipLookup = new Map(ownerships.map((ownership) => [ownership.rowIndex, ownership]));
+  const duplicateHighlightedRows = getDuplicateHighlightedRows(cells, snapshot.columnPermissions);
   const rows: SheetGridRow[] = [];
 
   for (let rowIndex = 1; rowIndex <= MAX_ROWS; rowIndex += 1) {
@@ -147,7 +183,8 @@ export function buildRowsFromCells(
         userId: snapshot.currentUser.id,
         columnKey,
         columnPermissions: snapshot.columnPermissions,
-        ownership
+        ownership,
+        currentValue: values[columnKey]
       });
 
       editable[columnKey] = decision.allowed;
@@ -165,6 +202,7 @@ export function buildRowsFromCells(
       __editable: editable,
       __lockReason: lockReason,
       __format: format,
+      __duplicateHighlight: duplicateHighlightedRows.has(rowIndex),
       ...values
     });
   }
@@ -214,12 +252,16 @@ export function applyDemoCellUpdate(
 
   const ownerships = ownershipsFromSnapshot(snapshot);
   const ownership = ownerships.find((item) => item.rowIndex === rowIndex) ?? null;
+  const previousCell = cellsFromSnapshot(snapshot).find(
+    (cell) => cell.rowIndex === rowIndex && cell.columnKey === columnKey
+  );
   const decision = getCellEditDecision({
     role: snapshot.currentUser.role,
     userId: snapshot.currentUser.id,
     columnKey,
     columnPermissions: snapshot.columnPermissions,
-    ownership
+    ownership,
+    currentValue: previousCell?.formula ?? previousCell?.value ?? ""
   });
 
   if (!decision.allowed) {
@@ -238,9 +280,6 @@ export function applyDemoCellUpdate(
   }
 
   const normalized = normalizeCellInput(value);
-  const previousCell = cellsFromSnapshot(snapshot).find(
-    (cell) => cell.rowIndex === rowIndex && cell.columnKey === columnKey
-  );
   const editedCell: CellState = {
     rowIndex,
     columnKey,

@@ -136,24 +136,30 @@ function HelpText({ children }: { children: React.ReactNode }) {
 
 function PermissionTile({
   columnKey,
-  editableByMember
+  editableByMember,
+  memberWriteOnce,
+  duplicateHighlight
 }: {
   columnKey: string;
   editableByMember: boolean;
+  memberWriteOnce: boolean;
+  duplicateHighlight: boolean;
 }) {
   return (
-    <label
-      className="group flex min-h-24 cursor-pointer flex-col justify-between rounded-md border border-[color:var(--line)] bg-[color:var(--panel-muted)] p-3 transition hover:border-[color:var(--accent)]"
+    <div
+      className="group flex min-h-36 cursor-pointer flex-col justify-between gap-3 rounded-md border border-[color:var(--line)] bg-[color:var(--panel-muted)] p-3 transition hover:border-[color:var(--accent)]"
       title={`${columnKey}: ${editableByMember ? "admin and member can edit" : "admin only"}`}
     >
       <span className="flex items-center justify-between gap-2">
         <span className="font-mono text-lg font-semibold">{columnKey}</span>
-        <input
-          className="h-4 w-4 accent-[color:var(--accent)]"
-          defaultChecked={editableByMember}
-          name={`permission-${columnKey}`}
-          type="checkbox"
-        />
+        <label className="inline-flex items-center gap-2">
+          <input
+            className="h-4 w-4 accent-[color:var(--accent)]"
+            defaultChecked={editableByMember}
+            name={`permission-${columnKey}`}
+            type="checkbox"
+          />
+        </label>
       </span>
       <span
         className={
@@ -165,7 +171,27 @@ function PermissionTile({
         {editableByMember ? <Users size={13} /> : <Lock size={13} />}
         {editableByMember ? "Admin + member" : "Admin only"}
       </span>
-    </label>
+      <span className="grid gap-2 text-xs font-medium text-[color:var(--text-muted)]">
+        <span className="flex items-center gap-2">
+          <input
+            className="h-4 w-4 accent-[color:var(--accent)]"
+            defaultChecked={memberWriteOnce}
+            name={`writeOnce-${columnKey}`}
+            type="checkbox"
+          />
+          Write once
+        </span>
+        <span className="flex items-center gap-2">
+          <input
+            className="h-4 w-4 accent-[color:var(--accent)]"
+            defaultChecked={duplicateHighlight}
+            name={`duplicateHighlight-${columnKey}`}
+            type="checkbox"
+          />
+          Yellow duplicates
+        </span>
+      </span>
+    </div>
   );
 }
 
@@ -333,8 +359,10 @@ export function AdminDashboard({ snapshot }: { snapshot: SheetSnapshot }) {
                 {snapshot.columnPermissions.map((permission) => (
                   <PermissionTile
                     columnKey={permission.columnKey}
+                    duplicateHighlight={permission.duplicateHighlight}
                     editableByMember={permission.editableByMember}
                     key={permission.columnKey}
+                    memberWriteOnce={permission.memberWriteOnce}
                   />
                 ))}
               </div>
@@ -344,7 +372,7 @@ export function AdminDashboard({ snapshot }: { snapshot: SheetSnapshot }) {
                   Save permissions
                 </ActionButton>
                 <span className="text-xs text-[color:var(--text-muted)]">
-                  Checked = admin and member can edit. Unchecked = admin only.
+                  Save also applies write-once locks and duplicate yellow rows.
                 </span>
               </div>
             </form>

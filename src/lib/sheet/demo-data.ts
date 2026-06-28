@@ -70,7 +70,9 @@ export function createDemoSnapshot(): SheetSnapshot {
     },
     columnPermissions: COLUMN_KEYS.map((columnKey) => ({
       columnKey,
-      editableByMember: ["A", "B", "D", "F", "G", "I", "J"].includes(columnKey)
+      editableByMember: ["A", "B", "D", "F", "G", "I", "J"].includes(columnKey),
+      memberWriteOnce: ["D"].includes(columnKey),
+      duplicateHighlight: ["A"].includes(columnKey)
     })),
     validationRules: [
       {

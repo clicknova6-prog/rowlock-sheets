@@ -431,7 +431,8 @@ function recomputeRowsForCurrentUser(
         userId: snapshot.currentUser.id,
         columnKey,
         columnPermissions: snapshot.columnPermissions,
-        ownership
+        ownership,
+        currentValue: getRawCellValue(row, columnKey)
       });
 
       editable[columnKey] = decision.allowed;
@@ -494,6 +495,10 @@ function getAlternateRowBackground(
   row: SheetGridRow,
   viewSetting: SheetViewSettingState
 ): string | undefined {
+  if (row.__duplicateHighlight) {
+    return "#fef08a";
+  }
+
   if (!viewSetting.alternateRowColors) {
     return undefined;
   }
@@ -516,6 +521,31 @@ function FormatIconButton({
         "focus-ring inline-flex h-9 w-9 items-center justify-center rounded-md border border-[color:var(--line)] transition hover:bg-[color:var(--panel-muted)]",
         active && "border-[color:var(--accent)] bg-[color:var(--panel-muted)] text-[color:var(--accent)]"
       )}
+      title={title}
+      type="button"
+      onClick={onClick}
+    >
+      {children}
+    </button>
+  );
+}
+
+function ToolbarTextButton({
+  title,
+  active = false,
+  disabled = false,
+  children,
+  onClick
+}: FormatButtonProps & { disabled?: boolean }) {
+  return (
+    <button
+      aria-pressed={active}
+      className={clsx(
+        "focus-ring inline-flex h-9 items-center justify-center gap-1.5 rounded-md border border-[color:var(--line)] px-2 text-xs font-semibold transition hover:bg-[color:var(--panel-muted)]",
+        active && "border-[color:var(--accent)] bg-[color:var(--panel-muted)] text-[color:var(--accent)]",
+        disabled && "cursor-not-allowed opacity-50 hover:bg-transparent"
+      )}
+      disabled={disabled}
       title={title}
       type="button"
       onClick={onClick}
@@ -669,6 +699,13 @@ export function SpreadsheetWorkspace({
     : selectedCell
       ? `${selectedCell.columnKey}${selectedCell.rowIndex}`
       : "--";
+  const selectedAdminColumnKey = selectedStartCell?.columnKey ?? null;
+  const selectedAdminRowIndex = selectedStartCell?.rowIndex ?? null;
+  const selectedColumnPermission = selectedAdminColumnKey
+    ? snapshot.columnPermissions.find(
+        (permission) => permission.columnKey === selectedAdminColumnKey
+      ) ?? null
+    : null;
   const selectedClipboardValue = selectedRange
     ? serializeCellRange(rows, snapshot.columns, selectedRange)
     : selectedRenderedValue;
@@ -1648,6 +1685,143 @@ export function SpreadsheetWorkspace({
     });
   }, [applyCellFormat, startTransition]);
 
+  const updateSelectedColumnRules = useCallback(async (
+    patch: Partial<Pick<NonNullable<typeof selectedColumnPermission>, "duplicateHighlight" | "memberWriteOnce">>
+  ): Promise<void> => {
+    if (!selectedAdminColumnKey || !selectedColumnPermission) {
+      setError(null);
+      setMessage("Select a column first.");
+      return;
+    }
+
+    if (demoMode) {
+      setMessage("Column rules are saved in live mode.");
+      return;
+    }
+
+    await flushQueuedCellUpdates();
+    setError(null);
+    setMessage(`Saving rules for column ${selectedAdminColumnKey}...`);
+
+    const response = await fetch("/api/columns/rules", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sheetId: snapshot.sheet.id,
+        columnKey: selectedAdminColumnKey,
+        editableByMember: selectedColumnPermission.editableByMember,
+        memberWriteOnce: patch.memberWriteOnce ?? selectedColumnPermission.memberWriteOnce,
+        duplicateHighlight:
+          patch.duplicateHighlight ?? selectedColumnPermission.duplicateHighlight,
+        sourceClientId: clientInstanceIdRef.current
+      })
+    });
+    const body = (await response.json().catch(() => null)) as {
+      snapshot?: SheetSnapshot;
+      error?: string;
+    } | null;
+
+    if (!response.ok || !body?.snapshot) {
+      setError(body?.error ?? "Column rules could not be saved.");
+      return;
+    }
+
+    applyServerSnapshot(body.snapshot);
+    setMessage(`Column ${selectedAdminColumnKey} rules saved.`);
+  }, [
+    applyServerSnapshot,
+    demoMode,
+    flushQueuedCellUpdates,
+    selectedAdminColumnKey,
+    selectedColumnPermission,
+    snapshot.sheet.id
+  ]);
+
+  const resetSelectedRow = useCallback(async (): Promise<void> => {
+    if (!selectedAdminRowIndex) {
+      setError(null);
+      setMessage("Select a row first.");
+      return;
+    }
+
+    if (demoMode) {
+      setMessage("Row reset is saved in live mode.");
+      return;
+    }
+
+    if (!window.confirm(`Reset row ${selectedAdminRowIndex}?`)) {
+      return;
+    }
+
+    await flushQueuedCellUpdates();
+    setError(null);
+    setMessage(`Resetting row ${selectedAdminRowIndex}...`);
+
+    const response = await fetch("/api/rows/reset", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sheetId: snapshot.sheet.id,
+        rowIndex: selectedAdminRowIndex,
+        sourceClientId: clientInstanceIdRef.current
+      })
+    });
+    const body = (await response.json().catch(() => null)) as {
+      snapshot?: SheetSnapshot;
+      error?: string;
+    } | null;
+
+    if (!response.ok || !body?.snapshot) {
+      setError(body?.error ?? "Row could not be reset.");
+      return;
+    }
+
+    applyServerSnapshot(body.snapshot);
+    setMessage(`Row ${selectedAdminRowIndex} reset.`);
+  }, [
+    applyServerSnapshot,
+    demoMode,
+    flushQueuedCellUpdates,
+    selectedAdminRowIndex,
+    snapshot.sheet.id
+  ]);
+
+  const unlockAllSheetRows = useCallback(async (): Promise<void> => {
+    if (demoMode) {
+      setMessage("Unlock all rows is saved in live mode.");
+      return;
+    }
+
+    if (!window.confirm("Unlock all rows?")) {
+      return;
+    }
+
+    await flushQueuedCellUpdates();
+    setError(null);
+    setMessage("Unlocking all rows...");
+
+    const response = await fetch("/api/rows/unlock-all", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sheetId: snapshot.sheet.id,
+        sourceClientId: clientInstanceIdRef.current
+      })
+    });
+    const body = (await response.json().catch(() => null)) as {
+      snapshot?: SheetSnapshot;
+      error?: string;
+    } | null;
+
+    if (!response.ok || !body?.snapshot) {
+      setError(body?.error ?? "Rows could not be unlocked.");
+      return;
+    }
+
+    applyServerSnapshot(body.snapshot);
+    setMessage("All rows unlocked.");
+  }, [applyServerSnapshot, demoMode, flushQueuedCellUpdates, snapshot.sheet.id]);
+
   const openCellHistory = useCallback(async (cell: SelectedCell): Promise<void> => {
     setHistoryPanel({
       cell,
@@ -2252,6 +2426,59 @@ export function SpreadsheetWorkspace({
             >
               <Eraser size={16} />
             </FormatIconButton>
+            <ToolbarTextButton
+              active={Boolean(selectedColumnPermission?.duplicateHighlight)}
+              disabled={!selectedColumnPermission}
+              title="Highlight duplicate entries in the selected column"
+              onClick={() =>
+                startTransition(() => {
+                  void updateSelectedColumnRules({
+                    duplicateHighlight: !selectedColumnPermission?.duplicateHighlight
+                  });
+                })
+              }
+            >
+              <PaintBucket size={14} />
+              Duplicate {selectedAdminColumnKey ?? "--"}
+            </ToolbarTextButton>
+            <ToolbarTextButton
+              active={Boolean(selectedColumnPermission?.memberWriteOnce)}
+              disabled={!selectedColumnPermission}
+              title="Members can fill this selected column once; admins can still edit"
+              onClick={() =>
+                startTransition(() => {
+                  void updateSelectedColumnRules({
+                    memberWriteOnce: !selectedColumnPermission?.memberWriteOnce
+                  });
+                })
+              }
+            >
+              <Lock size={14} />
+              Write once {selectedAdminColumnKey ?? "--"}
+            </ToolbarTextButton>
+            <ToolbarTextButton
+              disabled={!selectedAdminRowIndex}
+              title="Reset selected row"
+              onClick={() =>
+                startTransition(() => {
+                  void resetSelectedRow();
+                })
+              }
+            >
+              <Eraser size={14} />
+              Reset row {selectedAdminRowIndex ?? "--"}
+            </ToolbarTextButton>
+            <ToolbarTextButton
+              title="Unlock all rows"
+              onClick={() =>
+                startTransition(() => {
+                  void unlockAllSheetRows();
+                })
+              }
+            >
+              <Rows3 size={14} />
+              Unlock all
+            </ToolbarTextButton>
           </div>
 
           <div className="flex flex-wrap items-center gap-3">

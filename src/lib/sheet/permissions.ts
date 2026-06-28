@@ -8,6 +8,7 @@ export interface CellEditDecisionInput {
   columnKey: ColumnKey;
   columnPermissions: ColumnPermissionState[];
   ownership?: RowOwnershipState | null;
+  currentValue?: string | null;
 }
 
 export interface CellEditDecision {
@@ -35,6 +36,15 @@ export function getCellEditDecision(input: CellEditDecisionInput): CellEditDecis
     return {
       allowed: false,
       reason: "This column is admin-only.",
+      willClaimRow: false,
+      state: "admin-only"
+    };
+  }
+
+  if (permission.memberWriteOnce && input.currentValue?.trim()) {
+    return {
+      allowed: false,
+      reason: "This column locks for members after the first entry.",
       willClaimRow: false,
       state: "admin-only"
     };

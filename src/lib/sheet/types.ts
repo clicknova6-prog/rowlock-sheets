@@ -13,6 +13,8 @@ export interface Actor {
 export interface ColumnPermissionState {
   columnKey: ColumnKey;
   editableByMember: boolean;
+  memberWriteOnce: boolean;
+  duplicateHighlight: boolean;
 }
 
 export interface RowOwnershipState {
@@ -96,6 +98,7 @@ export interface SheetGridRow {
   __editable: Record<ColumnKey, boolean>;
   __lockReason: Record<ColumnKey, string | null>;
   __format: Record<ColumnKey, CellFormatState>;
+  __duplicateHighlight: boolean;
   A: string;
   B: string;
   C: string;

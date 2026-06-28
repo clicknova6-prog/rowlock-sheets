@@ -103,6 +103,39 @@ function buildFormatColumnRecord(): Record<(typeof COLUMN_KEYS)[number], CellFor
   ) as Record<(typeof COLUMN_KEYS)[number], CellFormatState>;
 }
 
+function getDuplicateHighlightedRows(
+  cellLookup: Map<string, CellState>,
+  permissions: ColumnPermissionState[]
+): Set<number> {
+  const highlightedRows = new Set<number>();
+  const duplicateColumns = permissions
+    .filter((permission) => permission.duplicateHighlight)
+    .map((permission) => permission.columnKey);
+
+  for (const columnKey of duplicateColumns) {
+    const valueRows = new Map<string, number[]>();
+
+    for (let rowIndex = 1; rowIndex <= MAX_ROWS; rowIndex += 1) {
+      const cell = cellLookup.get(getCellKey(rowIndex, columnKey));
+      const value = (cell?.computedValue ?? cell?.value ?? "").trim().toLowerCase();
+
+      if (!value) {
+        continue;
+      }
+
+      valueRows.set(value, [...(valueRows.get(value) ?? []), rowIndex]);
+    }
+
+    for (const rows of valueRows.values()) {
+      if (rows.length > 1) {
+        rows.forEach((rowIndex) => highlightedRows.add(rowIndex));
+      }
+    }
+  }
+
+  return highlightedRows;
+}
+
 export async function getDefaultSheetId(): Promise<string | null> {
   const sheet = await prisma.sheet.findFirst({
     orderBy: { createdAt: "asc" },
@@ -144,7 +177,12 @@ export async function getSheetSnapshot(
     }),
     prisma.columnPermission.findMany({
       where: { sheetId },
-      select: { columnKey: true, editableByMember: true }
+      select: {
+        columnKey: true,
+        editableByMember: true,
+        memberWriteOnce: true,
+        duplicateHighlight: true
+      }
     }),
     prisma.rowOwnership.findMany({
       where: { sheetId },
@@ -196,7 +234,9 @@ export async function getSheetSnapshot(
     const permission = columnPermissions.find((item) => item.columnKey === columnKey);
     return {
       columnKey,
-      editableByMember: permission?.editableByMember ?? false
+      editableByMember: permission?.editableByMember ?? false,
+      memberWriteOnce: permission?.memberWriteOnce ?? false,
+      duplicateHighlight: permission?.duplicateHighlight ?? false
     };
   });
 
@@ -237,6 +277,8 @@ export async function getSheetSnapshot(
     });
   }
 
+  const duplicateHighlightedRows = getDuplicateHighlightedRows(cellLookup, permissions);
+
   const sheetRowLookup = new Map(
     sheetRows.map((row) => [
       row.rowIndex,
@@ -271,7 +313,8 @@ export async function getSheetSnapshot(
         userId: currentUser.id,
         columnKey,
         columnPermissions: permissions,
-        ownership
+        ownership,
+        currentValue: values[columnKey]
       });
 
       editable[columnKey] = decision.allowed;
@@ -291,6 +334,7 @@ export async function getSheetSnapshot(
       __editable: editable,
       __lockReason: lockReason,
       __format: format,
+      __duplicateHighlight: duplicateHighlightedRows.has(rowIndex),
       ...values
     });
   }

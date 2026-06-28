@@ -76,6 +76,14 @@ export interface GetCellHistoryInput {
   columnKey: string;
 }
 
+export interface UpdateColumnRuleSettingsInput {
+  sheetId: string;
+  columnKey: string;
+  editableByMember: boolean;
+  memberWriteOnce: boolean;
+  duplicateHighlight: boolean;
+}
+
 function normalizeExistingCells(
   cells: Array<{
     rowIndex: number;
@@ -306,12 +314,19 @@ async function refreshBulkFormulaCells(
 async function getPermissionStates(sheetId: string): Promise<ColumnPermissionState[]> {
   const permissions = await prisma.columnPermission.findMany({
     where: { sheetId },
-    select: { columnKey: true, editableByMember: true }
+    select: {
+      columnKey: true,
+      editableByMember: true,
+      memberWriteOnce: true,
+      duplicateHighlight: true
+    }
   });
 
   return permissions.map((permission) => ({
     columnKey: assertColumnKey(permission.columnKey),
-    editableByMember: permission.editableByMember
+    editableByMember: permission.editableByMember,
+    memberWriteOnce: permission.memberWriteOnce,
+    duplicateHighlight: permission.duplicateHighlight
   }));
 }
 
@@ -364,16 +379,27 @@ export async function claimRowForEdit(
     return getSheetSnapshot(input.sheetId, actor);
   }
 
-  const [columnPermissions, ownership] = await Promise.all([
+  const [columnPermissions, ownership, existingCell] = await Promise.all([
     getPermissionStates(input.sheetId),
-    getOwnershipState(input.sheetId, input.rowIndex)
+    getOwnershipState(input.sheetId, input.rowIndex),
+    prisma.cell.findUnique({
+      where: {
+        sheetId_rowIndex_columnKey: {
+          sheetId: input.sheetId,
+          rowIndex: input.rowIndex,
+          columnKey
+        }
+      },
+      select: { value: true, formula: true }
+    })
   ]);
   const decision = getCellEditDecision({
     role: actor.role,
     userId: actor.id,
     columnKey,
     columnPermissions,
-    ownership
+    ownership,
+    currentValue: existingCell?.formula ?? existingCell?.value ?? ""
   });
 
   if (!decision.allowed) {
@@ -467,18 +493,6 @@ export async function updateCell(
       })
     ]);
 
-  const decision = getCellEditDecision({
-    role: actor.role,
-    userId: actor.id,
-    columnKey,
-    columnPermissions,
-    ownership
-  });
-
-  if (!decision.allowed) {
-    throw new SheetRuleError(decision.reason ?? "You cannot edit this cell.");
-  }
-
   const validationDecision = validateAllowedValue({
     role: actor.role,
     columnKey,
@@ -495,6 +509,20 @@ export async function updateCell(
   const previousCell = existingCellStates.find(
     (cell) => cell.rowIndex === input.rowIndex && cell.columnKey === columnKey
   );
+  const previousRawValue = previousCell?.formula ?? previousCell?.value ?? "";
+  const decision = getCellEditDecision({
+    role: actor.role,
+    userId: actor.id,
+    columnKey,
+    columnPermissions,
+    ownership,
+    currentValue: previousRawValue
+  });
+
+  if (!decision.allowed) {
+    throw new SheetRuleError(decision.reason ?? "You cannot edit this cell.");
+  }
+
   const editedCell: CellState = {
     rowIndex: input.rowIndex,
     columnKey,
@@ -526,6 +554,16 @@ export async function updateCell(
         where: { sheetId_rowIndex: { sheetId: input.sheetId, rowIndex: input.rowIndex } },
         include: { owner: { select: { name: true } } }
       });
+      const liveCell = await tx.cell.findUnique({
+        where: {
+          sheetId_rowIndex_columnKey: {
+            sheetId: input.sheetId,
+            rowIndex: input.rowIndex,
+            columnKey
+          }
+        },
+        select: { value: true, formula: true }
+      });
 
       const liveDecision = getCellEditDecision({
         role: actor.role,
@@ -538,7 +576,8 @@ export async function updateCell(
               ownerId: liveOwnership.ownerId,
               ownerName: liveOwnership.owner.name
             }
-          : null
+          : null,
+        currentValue: liveCell?.formula ?? liveCell?.value ?? ""
       });
 
       if (!liveDecision.allowed) {
@@ -722,12 +761,14 @@ export async function bulkUpdateCells(
 
   for (const update of normalizedUpdates) {
     const ownership = ownershipLookup.get(update.rowIndex) ?? null;
+    const previousCell = previousCellLookup.get(getCellKey(update.rowIndex, update.columnKey));
     const decision = getCellEditDecision({
       role: actor.role,
       userId: actor.id,
       columnKey: update.columnKey,
       columnPermissions,
-      ownership
+      ownership,
+      currentValue: previousCell?.formula ?? previousCell?.value ?? ""
     });
 
     if (!decision.allowed) {
@@ -971,6 +1012,165 @@ export async function updateCellFormats(
   );
 
   return getSheetSnapshot(input.sheetId, actor);
+}
+
+export async function updateColumnRuleSettings(
+  actor: Actor,
+  input: UpdateColumnRuleSettingsInput
+): Promise<SheetSnapshot> {
+  if (actor.role !== Role.ADMIN) {
+    throw new SheetRuleError("Only admins can update column rules.", 403);
+  }
+
+  const columnKey = assertColumnKey(input.columnKey);
+
+  await prisma.sheet.findUniqueOrThrow({
+    where: { id: input.sheetId },
+    select: { id: true }
+  });
+
+  await prisma.$transaction(async (tx) => {
+    await tx.columnPermission.upsert({
+      where: {
+        sheetId_columnKey: {
+          sheetId: input.sheetId,
+          columnKey
+        }
+      },
+      create: {
+        sheetId: input.sheetId,
+        columnKey,
+        editableByMember: input.editableByMember,
+        memberWriteOnce: input.memberWriteOnce,
+        duplicateHighlight: input.duplicateHighlight
+      },
+      update: {
+        editableByMember: input.editableByMember,
+        memberWriteOnce: input.memberWriteOnce,
+        duplicateHighlight: input.duplicateHighlight
+      }
+    });
+
+    await tx.auditLog.create({
+      data: {
+        sheetId: input.sheetId,
+        actorId: actor.id,
+        action: AuditAction.COLUMN_PERMISSION_UPDATED,
+        columnKey,
+        message: `${actor.name} updated rules for column ${columnKey}.`,
+        metadata: {
+          editableByMember: input.editableByMember,
+          memberWriteOnce: input.memberWriteOnce,
+          duplicateHighlight: input.duplicateHighlight
+        }
+      }
+    });
+  });
+
+  return getSheetSnapshot(input.sheetId, actor);
+}
+
+export async function unlockAllRows(actor: Actor, sheetId: string): Promise<SheetSnapshot> {
+  if (actor.role !== Role.ADMIN) {
+    throw new SheetRuleError("Only admins can unlock rows.", 403);
+  }
+
+  await prisma.$transaction(async (tx) => {
+    const result = await tx.rowOwnership.deleteMany({ where: { sheetId } });
+
+    await tx.auditLog.create({
+      data: {
+        sheetId,
+        actorId: actor.id,
+        action: AuditAction.ROW_UNLOCKED,
+        message: `${actor.name} unlocked all rows.`,
+        metadata: {
+          unlockedRows: result.count
+        }
+      }
+    });
+  });
+
+  return getSheetSnapshot(sheetId, actor);
+}
+
+export async function resetRow(actor: Actor, sheetId: string, rowIndex: number): Promise<SheetSnapshot> {
+  if (actor.role !== Role.ADMIN) {
+    throw new SheetRuleError("Only admins can reset rows.", 403);
+  }
+
+  if (!isValidRowIndex(rowIndex)) {
+    throw new SheetRuleError("Rows must be between 1 and 1000.");
+  }
+
+  await prisma.sheet.findUniqueOrThrow({
+    where: { id: sheetId },
+    select: { id: true }
+  });
+
+  const [columnPermissions, existingCells] = await Promise.all([
+    getPermissionStates(sheetId),
+    prisma.cell.findMany({
+      where: { sheetId },
+      select: {
+        rowIndex: true,
+        columnKey: true,
+        value: true,
+        formula: true,
+        computedValue: true
+      }
+    })
+  ]);
+  const resetColumns = columnPermissions
+    .filter((permission) => permission.editableByMember)
+    .map((permission) => permission.columnKey);
+
+  await prisma.rowOwnership.deleteMany({
+    where: { sheetId, rowIndex }
+  });
+
+  if (resetColumns.length > 0) {
+    const resetCells: CellState[] = resetColumns.map((columnKey) => ({
+      rowIndex,
+      columnKey,
+      value: "",
+      formula: null,
+      computedValue: ""
+    }));
+    const existingCellStates = normalizeExistingCells(existingCells);
+    const nextCellsWithoutComputed = upsertEditedCells(existingCellStates, resetCells);
+    const recalculated = recalculateCells(nextCellsWithoutComputed);
+    const nextCells = mergeRecalculatedCells(nextCellsWithoutComputed, recalculated);
+    const computedLookup = new Map(
+      nextCells.map((cell) => [getCellKey(cell.rowIndex, cell.columnKey), cell.computedValue ?? ""])
+    );
+    const resetCellKeys = new Set(
+      resetCells.map((cell) => getCellKey(cell.rowIndex, cell.columnKey))
+    );
+    const formulaCellsToRefresh = nextCells.filter(
+      (cell) => cell.formula && !resetCellKeys.has(getCellKey(cell.rowIndex, cell.columnKey))
+    );
+
+    await upsertBulkSheetRows(sheetId, [rowIndex], actor.id);
+    await upsertBulkCells(sheetId, resetCells, computedLookup, actor.id);
+    await refreshBulkFormulaCells(sheetId, formulaCellsToRefresh);
+  }
+
+  await prisma.auditLog.create({
+    data: {
+      sheetId,
+      actorId: actor.id,
+      action: AuditAction.CELL_UPDATED,
+      rowIndex,
+      message: `${actor.name} reset row ${rowIndex}.`,
+      metadata: {
+        resetColumns,
+        clearedCells: resetColumns.length
+      }
+    }
+  });
+
+  return getSheetSnapshot(sheetId, actor);
 }
 
 export async function getCellHistory(

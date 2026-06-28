@@ -143,12 +143,14 @@ model SheetViewSetting {
 }
 
 model ColumnPermission {
-  id               String   @id @default(cuid())
-  sheetId          String
-  columnKey        String   @db.VarChar(1)
-  editableByMember Boolean  @default(false)
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
+  id                 String   @id @default(cuid())
+  sheetId            String
+  columnKey          String   @db.VarChar(1)
+  editableByMember   Boolean  @default(false)
+  memberWriteOnce    Boolean  @default(false)
+  duplicateHighlight Boolean  @default(false)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
 
   sheet Sheet @relation(fields: [sheetId], references: [id], onDelete: Cascade)
 

@@ -107,7 +107,9 @@ export async function saveColumnPermissionsAction(formData: FormData): Promise<v
   const permissions = COLUMN_KEYS.map((columnKey) => ({
     sheetId,
     columnKey,
-    editableByMember: formData.has(`permission-${columnKey}`)
+    editableByMember: formData.has(`permission-${columnKey}`),
+    memberWriteOnce: formData.has(`writeOnce-${columnKey}`),
+    duplicateHighlight: formData.has(`duplicateHighlight-${columnKey}`)
   }));
 
   await prisma.$transaction(

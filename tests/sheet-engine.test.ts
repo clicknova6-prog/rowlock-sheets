@@ -4,11 +4,27 @@ import { getCellEditDecision } from "@/lib/sheet/permissions";
 import { evaluateConditionalRules } from "@/lib/sheet/rules";
 import { recalculateCells, mergeRecalculatedCells } from "@/lib/sheet/formulas";
 import { validateAllowedValue } from "@/lib/sheet/validation";
-import type { CellState, ConditionalRuleState } from "@/lib/sheet/types";
+import type { CellState, ColumnPermissionState, ConditionalRuleState } from "@/lib/sheet/types";
 
-const permissions = [
-  { columnKey: "A" as const, editableByMember: true },
-  { columnKey: "B" as const, editableByMember: false }
+const permissions: ColumnPermissionState[] = [
+  {
+    columnKey: "A",
+    editableByMember: true,
+    memberWriteOnce: false,
+    duplicateHighlight: false
+  },
+  {
+    columnKey: "B",
+    editableByMember: false,
+    memberWriteOnce: false,
+    duplicateHighlight: false
+  },
+  {
+    columnKey: "C",
+    editableByMember: true,
+    memberWriteOnce: true,
+    duplicateHighlight: false
+  }
 ];
 
 describe("cell permission and row ownership rules", () => {
@@ -63,6 +79,19 @@ describe("cell permission and row ownership rules", () => {
 
     expect(decision.allowed).toBe(false);
     expect(decision.state).toBe("owned-by-other");
+  });
+
+  it("blocks members from changing write-once cells after first entry", () => {
+    const decision = getCellEditDecision({
+      role: Role.MEMBER,
+      userId: "member",
+      columnKey: "C",
+      columnPermissions: permissions,
+      currentValue: "Already filled"
+    });
+
+    expect(decision.allowed).toBe(false);
+    expect(decision.reason).toContain("first entry");
   });
 });
 
