@@ -130,7 +130,8 @@ service cloud.firestore {
       allow read, write: if false;
 
       match /events/{eventId} {
-        allow read: if signedIn() && isValidRealtimeEvent(sheetId, resource.data);
+        allow get: if signedIn() && isValidRealtimeEvent(sheetId, resource.data);
+        allow list: if signedIn();
         allow create, update, delete: if false;
       }
     }
