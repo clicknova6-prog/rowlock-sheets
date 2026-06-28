@@ -17,6 +17,11 @@ env:
     availability:
       - BUILD
       - RUNTIME
+  - variable: NEXT_PUBLIC_ENABLE_SOCKET_SYNC
+    value: "false"
+    availability:
+      - BUILD
+      - RUNTIME
   - variable: DB_CONNECTION_LIMIT
     value: "5"
     availability:

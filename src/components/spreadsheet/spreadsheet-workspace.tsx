@@ -119,6 +119,7 @@ const CELL_AUTOSAVE_DEBOUNCE_MS = 750;
 const BULK_AUTOSAVE_DEBOUNCE_MS = 150;
 const AUTOSAVE_MAX_BATCH_SIZE = 200;
 const SOCKET_BULK_UPDATE_LIMIT = 50;
+const REST_BULK_UPDATE_LIMIT = 200;
 const LIVE_SYNC_ACK_TIMEOUT_MS = 300000;
 
 function isColumnKey(value: string, columns: ColumnKey[]): value is ColumnKey {
@@ -754,18 +755,14 @@ export function SpreadsheetWorkspace({
       return false;
     }
 
+    const useSocket = socketConnectedRef.current;
+    const batchLimit = useSocket ? SOCKET_BULK_UPDATE_LIMIT : REST_BULK_UPDATE_LIMIT;
     const queuedUpdates = [...saveQueueRef.current.values()];
-    const updates = queuedUpdates.slice(0, SOCKET_BULK_UPDATE_LIMIT);
-    const remainingUpdates = queuedUpdates.slice(SOCKET_BULK_UPDATE_LIMIT);
+    const updates = queuedUpdates.slice(0, batchLimit);
+    const remainingUpdates = queuedUpdates.slice(batchLimit);
 
     if (updates.length === 0) {
       return true;
-    }
-
-    if (!socketConnectedRef.current) {
-      setError("Live sync is not connected. Run the app with the custom server so /socket.io is available.");
-      scheduleQueuedSave();
-      return false;
     }
 
     clearAutosaveTimer();
@@ -777,7 +774,60 @@ export function SpreadsheetWorkspace({
     saveInFlightRef.current = true;
     setIsSavingCells(true);
     setError(null);
-    setMessage(`Syncing ${updates.length} cell${updates.length === 1 ? "" : "s"}...`);
+    setMessage(`${useSocket ? "Syncing" : "Saving"} ${updates.length} cell${updates.length === 1 ? "" : "s"}...`);
+
+    if (!useSocket) {
+      try {
+        const response = await fetch("/api/cells", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            sheetId: latestSnapshotRef.current.sheet.id,
+            updates
+          })
+        });
+        const body = (await response.json().catch(() => null)) as {
+          snapshot?: SheetSnapshot;
+          error?: string;
+        } | null;
+
+        if (!response.ok || !body?.snapshot) {
+          throw new Error(body?.error ?? "Unable to save queued changes.");
+        }
+
+        saveInFlightRef.current = false;
+        setIsSavingCells(false);
+        applyServerSnapshot(body.snapshot);
+        setPendingSaveCount(saveQueueRef.current.size);
+        setMessage(
+          `${updates.length} cell${updates.length === 1 ? "" : "s"} saved${
+            saveQueueRef.current.size > 0 ? `, ${saveQueueRef.current.size} still queued` : ""
+          }.`
+        );
+
+        if (saveQueueRef.current.size > 0) {
+          scheduleQueuedSave(100);
+        }
+
+        return true;
+      } catch (saveError) {
+        for (const update of updates) {
+          const key = getCellKey(update.rowIndex, update.columnKey);
+
+          if (!saveQueueRef.current.has(key)) {
+            saveQueueRef.current.set(key, update);
+          }
+        }
+
+        saveInFlightRef.current = false;
+        setIsSavingCells(false);
+        setPendingSaveCount(saveQueueRef.current.size);
+        setMessage(null);
+        setError(saveError instanceof Error ? saveError.message : "Unable to save queued changes.");
+        scheduleQueuedSave(2000);
+        return false;
+      }
+    }
 
     for (const update of updates) {
       const key = getCellKey(update.rowIndex, update.columnKey);
@@ -809,7 +859,7 @@ export function SpreadsheetWorkspace({
     );
     scheduleInFlightTimeout();
     return true;
-  }, [clearAutosaveTimer, demoMode, scheduleInFlightTimeout, scheduleQueuedSave]);
+  }, [applyServerSnapshot, clearAutosaveTimer, demoMode, scheduleInFlightTimeout, scheduleQueuedSave]);
 
   useEffect(() => {
     flushQueuedCellUpdatesRef.current = flushQueuedCellUpdates;
@@ -831,7 +881,7 @@ export function SpreadsheetWorkspace({
     const queuedCount = saveQueueRef.current.size;
     setPendingSaveCount(queuedCount);
     setError(null);
-    setMessage(`${label} Live sync queued for ${queuedCount} cell${queuedCount === 1 ? "" : "s"}.`);
+    setMessage(`${label} Save queued for ${queuedCount} cell${queuedCount === 1 ? "" : "s"}.`);
 
     if (queuedCount >= AUTOSAVE_MAX_BATCH_SIZE && !saveInFlightRef.current) {
       void flushQueuedCellUpdates();
@@ -1043,9 +1093,10 @@ export function SpreadsheetWorkspace({
     });
   }, []);
 
+  const socketSyncEnabled = !demoMode && process.env.NEXT_PUBLIC_ENABLE_SOCKET_SYNC !== "false";
   const sheetSocket = useSheet({
     sheetId: snapshot.sheet.id,
-    enabled: !demoMode,
+    enabled: socketSyncEnabled,
     onCellChanged: handleSocketCellChanged,
     onCellsChanged: handleSocketCellsChanged,
     onRowClaimed: handleSocketRowClaimed,
@@ -1062,7 +1113,7 @@ export function SpreadsheetWorkspace({
     focusCell: socketFocusCell,
     blurCell: socketBlurCell
   } = sheetSocket;
-  const liveConnected = demoMode || socketConnected;
+  const liveConnected = demoMode || (socketSyncEnabled && socketConnected);
 
   useEffect(() => {
     socketConnectedRef.current = liveConnected;
@@ -1112,7 +1163,7 @@ export function SpreadsheetWorkspace({
   }, [liveConnected, scheduleQueuedSave]);
 
   useEffect(() => {
-    if (liveConnected || demoMode || inFlightUpdatesRef.current.size === 0) {
+    if (!socketSyncEnabled || liveConnected || demoMode || inFlightUpdatesRef.current.size === 0) {
       return;
     }
 
@@ -1129,10 +1180,10 @@ export function SpreadsheetWorkspace({
     setPendingSaveCount(saveQueueRef.current.size);
     restoreCommittedRowsWithOptimisticEdits();
     setError("Live sync disconnected. Changes are queued and will retry when it reconnects.");
-  }, [clearInFlightTimeout, demoMode, liveConnected, restoreCommittedRowsWithOptimisticEdits]);
+  }, [clearInFlightTimeout, demoMode, liveConnected, restoreCommittedRowsWithOptimisticEdits, socketSyncEnabled]);
 
   const focusLiveCell = useCallback((cell: SelectedCell): void => {
-    if (demoMode) {
+    if (demoMode || !socketSyncEnabled) {
       return;
     }
 
@@ -1147,26 +1198,26 @@ export function SpreadsheetWorkspace({
 
     activeSocketCellRef.current = cell;
     socketFocusCellRef.current(cell);
-  }, [demoMode]);
+  }, [demoMode, socketSyncEnabled]);
 
   const claimLiveRow = useCallback((cell: SelectedCell): void => {
-    if (demoMode || snapshot.currentUser.role === Role.ADMIN) {
+    if (demoMode || !socketSyncEnabled || snapshot.currentUser.role === Role.ADMIN) {
       return;
     }
 
     socketClaimRowRef.current(cell);
-  }, [demoMode, snapshot.currentUser.role]);
+  }, [demoMode, snapshot.currentUser.role, socketSyncEnabled]);
 
   const blurActiveLiveCell = useCallback((): void => {
     const activeCell = activeSocketCellRef.current;
 
-    if (!activeCell || demoMode) {
+    if (!activeCell || demoMode || !socketSyncEnabled) {
       return;
     }
 
     socketBlurCellRef.current(activeCell);
     activeSocketCellRef.current = null;
-  }, [demoMode]);
+  }, [demoMode, socketSyncEnabled]);
 
   useEffect(() => {
     return () => {
