@@ -7,6 +7,7 @@ A production-oriented spreadsheet SaaS built with Next.js App Router, React, Typ
 - Fixed spreadsheet grid: columns A-Z and rows 1-1000
 - Admin/member roles with signed httpOnly cookie sessions
 - Firebase Email/password authentication with Firestore-backed user profiles
+- Admin-created member logins through Firebase Authentication
 - Column permissions controlled by admin
 - Member row ownership and admin row unlock
 - Allowed-value validation per column
@@ -90,7 +91,7 @@ To run on a different local port:
 npm run dev -- --port 3001
 ```
 
-With Firebase Auth enabled, create users in Firebase Authentication or sign in with existing Firebase users. Set `FIREBASE_ADMIN_EMAILS` before a user's first sign-in to make that user an admin profile in Firestore.
+With Firebase Auth enabled, create the first admin in Firebase Authentication or sign in with an existing Firebase user. Set `FIREBASE_ADMIN_EMAILS` before that user's first sign-in to make that user an admin profile in Firestore. After that, admins can create member email/password logins from the Admin Dashboard.
 
 The old Prisma seed passwords are no longer used by the login page.
 

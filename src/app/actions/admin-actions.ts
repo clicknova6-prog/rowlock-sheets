@@ -5,13 +5,28 @@ import { AuditAction, RuleOperator } from "@/generated/prisma/enums";
 import { requireAdmin } from "@/lib/auth/session";
 import { COLUMN_KEYS, assertColumnKey, isValidRowIndex } from "@/lib/constants";
 import { prisma } from "@/lib/db";
+import { createFirebaseMember } from "@/lib/firebase/users";
 import { unlockRow } from "@/lib/sheet/service";
 import { normalizeHexColor } from "@/lib/sheet/formatting";
 import { parseRuleValues, toRuleOperator } from "@/lib/sheet/rules";
 import { parseAllowedValues } from "@/lib/sheet/validation";
 
+export interface CreateMemberActionState {
+  ok: boolean;
+  message: string;
+}
+
+const CREATE_MEMBER_INITIAL_STATE: CreateMemberActionState = {
+  ok: false,
+  message: ""
+};
+
 function getString(formData: FormData, name: string): string {
   return String(formData.get(name) ?? "").trim();
+}
+
+function isValidEmail(email: string): boolean {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 }
 
 async function auditAdminChange(
@@ -33,6 +48,57 @@ async function auditAdminChange(
 function refreshApp(): void {
   revalidatePath("/");
   revalidatePath("/admin");
+}
+
+export async function createMemberAction(
+  previousState: CreateMemberActionState = CREATE_MEMBER_INITIAL_STATE,
+  formData: FormData
+): Promise<CreateMemberActionState> {
+  void previousState;
+  await requireAdmin();
+
+  const email = getString(formData, "email").toLowerCase();
+  const name = getString(formData, "name");
+  const password = getString(formData, "password");
+
+  if (!isValidEmail(email)) {
+    return { ok: false, message: "Enter a valid email address." };
+  }
+
+  if (password.length < 8) {
+    return { ok: false, message: "Password must be at least 8 characters." };
+  }
+
+  if (password.length > 128) {
+    return { ok: false, message: "Password is too long." };
+  }
+
+  if (name.length > 120) {
+    return { ok: false, message: "Name must be 120 characters or fewer." };
+  }
+
+  try {
+    const member = await createFirebaseMember({
+      email,
+      name: name || email.split("@")[0] || "Member",
+      password
+    });
+
+    refreshApp();
+
+    return {
+      ok: true,
+      message: `${member.email} can now log in as a member.`
+    };
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : "Unable to create this member.";
+
+    return {
+      ok: false,
+      message
+    };
+  }
 }
 
 export async function saveColumnPermissionsAction(formData: FormData): Promise<void> {

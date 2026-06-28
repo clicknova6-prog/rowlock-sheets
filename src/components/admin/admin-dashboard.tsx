@@ -6,6 +6,7 @@ import {
   Palette,
   Save,
   Trash2,
+  UserPlus,
   Users
 } from "lucide-react";
 import {
@@ -17,6 +18,7 @@ import {
   saveValidationRuleAction,
   unlockRowAction
 } from "@/app/actions/admin-actions";
+import { CreateMemberForm } from "@/components/admin/create-member-form";
 import { RuleOperator } from "@/generated/prisma/enums";
 import { COLUMN_KEYS } from "@/lib/constants";
 import type { ConditionalRuleState, RuleConditionState, SheetSnapshot } from "@/lib/sheet/types";
@@ -511,6 +513,14 @@ export function AdminDashboard({ snapshot }: { snapshot: SheetSnapshot }) {
         </div>
 
         <div className="space-y-4">
+          <Section
+            description="Create a Firebase login for a new member. They can use this email and temporary password on the login page."
+            icon={<UserPlus size={18} />}
+            title="Add Member"
+          >
+            <CreateMemberForm />
+          </Section>
+
           <Section
             description="When a member first edits a row, that row belongs to them. Unlock a row to let another member claim it."
             icon={<LockOpen size={18} />}
