@@ -46,9 +46,11 @@ import { Role } from "@/generated/prisma/enums";
 import { MAX_ROWS, getCellKey } from "@/lib/constants";
 import type { ColumnKey } from "@/lib/constants";
 import { useSheet } from "@/hooks/useSheet";
+import { useSheetRealtime } from "@/hooks/useSheetRealtime";
 import { applyDemoCellFormatUpdate, applyDemoCellUpdate } from "@/lib/sheet/demo-engine";
 import { FORMAT_COLOR_PALETTE, createDefaultCellFormat } from "@/lib/sheet/formatting";
 import { getCellEditDecision } from "@/lib/sheet/permissions";
+import type { SheetRealtimeEvent } from "@/lib/sheet/realtime-types";
 import type {
   CellChangedPayload,
   CellErrorPayload,
@@ -121,6 +123,7 @@ const AUTOSAVE_MAX_BATCH_SIZE = 200;
 const SOCKET_BULK_UPDATE_LIMIT = 50;
 const REST_BULK_UPDATE_LIMIT = 200;
 const LIVE_SYNC_ACK_TIMEOUT_MS = 300000;
+const REALTIME_SNAPSHOT_REFRESH_MS = 400;
 
 function isColumnKey(value: string, columns: ColumnKey[]): value is ColumnKey {
   return columns.includes(value as ColumnKey);
@@ -374,6 +377,26 @@ function applyUpdatesToRows(
   });
 }
 
+function mergeRowsByNumber(
+  currentRows: SheetGridRow[],
+  incomingRows: SheetGridRow[]
+): SheetGridRow[] {
+  if (incomingRows.length === 0) {
+    return currentRows;
+  }
+
+  const incomingLookup = new Map(incomingRows.map((row) => [row.rowNumber, row]));
+  return currentRows.map((row) => incomingLookup.get(row.rowNumber) ?? row);
+}
+
+function createClientInstanceId(): string {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return crypto.randomUUID();
+  }
+
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+}
+
 function recomputeRowsForCurrentUser(
   rows: SheetGridRow[],
   snapshot: SheetSnapshot
@@ -582,9 +605,12 @@ export function SpreadsheetWorkspace({
   const inFlightUpdatesRef = useRef<Map<string, CellUpdateDraft>>(new Map());
   const autosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const inFlightTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const snapshotRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const saveInFlightRef = useRef(false);
   const flushQueuedCellUpdatesRef = useRef<() => Promise<boolean>>(async () => true);
   const activeSocketCellRef = useRef<SelectedCell | null>(null);
+  const rowClaimRequestsRef = useRef<Set<number>>(new Set());
+  const clientInstanceIdRef = useRef(createClientInstanceId());
   const socketConnectedRef = useRef(false);
   const socketUpdateCellRef = useRef<(update: CellUpdateDraft) => boolean>(() => false);
   const socketUpdateCellsRef = useRef<(updates: CellUpdateDraft[]) => boolean>(() => false);
@@ -593,6 +619,10 @@ export function SpreadsheetWorkspace({
   const socketBlurCellRef = useRef<(cell: SelectedCell) => void>(() => undefined);
 
   const socketSyncEnabled = !demoMode && process.env.NEXT_PUBLIC_ENABLE_SOCKET_SYNC !== "false";
+  const firestoreSyncEnabled =
+    !demoMode &&
+    !socketSyncEnabled &&
+    process.env.NEXT_PUBLIC_ENABLE_FIRESTORE_SYNC !== "false";
   const isAdmin = snapshot.currentUser.role === Role.ADMIN;
   const selectedStartCell = getRangeStartCell(selectedRange, snapshot.columns) ?? selectedCell;
   const selectedRow = selectedCell
@@ -668,6 +698,9 @@ export function SpreadsheetWorkspace({
       }
       if (inFlightTimeoutRef.current) {
         clearTimeout(inFlightTimeoutRef.current);
+      }
+      if (snapshotRefreshTimerRef.current) {
+        clearTimeout(snapshotRefreshTimerRef.current);
       }
     };
   }, []);
@@ -786,7 +819,8 @@ export function SpreadsheetWorkspace({
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             sheetId: latestSnapshotRef.current.sheet.id,
-            updates
+            updates,
+            sourceClientId: clientInstanceIdRef.current
           })
         });
         const body = (await response.json().catch(() => null)) as {
@@ -896,7 +930,11 @@ export function SpreadsheetWorkspace({
 
   const applySocketRows = useCallback((incomingRows: SheetGridRow[]): void => {
     const currentSnapshot = latestSnapshotRef.current;
-    const committedRows = recomputeRowsForCurrentUser(incomingRows, currentSnapshot);
+    const mergedRows =
+      incomingRows.length === currentSnapshot.rows.length
+        ? incomingRows
+        : mergeRowsByNumber(currentSnapshot.rows, incomingRows);
+    const committedRows = recomputeRowsForCurrentUser(mergedRows, currentSnapshot);
     const committedSnapshot = {
       ...currentSnapshot,
       rows: committedRows
@@ -959,6 +997,46 @@ export function SpreadsheetWorkspace({
 
     setRows(visibleRows);
   }, []);
+
+  const refreshLatestSnapshot = useCallback(async (): Promise<void> => {
+    if (demoMode) {
+      return;
+    }
+
+    try {
+      const sheetId = latestSnapshotRef.current.sheet.id;
+      const response = await fetch(`/api/sheets/${encodeURIComponent(sheetId)}/snapshot`, {
+        cache: "no-store"
+      });
+      const body = (await response.json().catch(() => null)) as {
+        snapshot?: SheetSnapshot;
+        error?: string;
+      } | null;
+
+      if (!response.ok || !body?.snapshot) {
+        throw new Error(body?.error ?? "Unable to refresh the latest sheet.");
+      }
+
+      applyServerSnapshot(body.snapshot);
+    } catch (refreshError) {
+      setError(
+        refreshError instanceof Error
+          ? refreshError.message
+          : "Unable to refresh the latest sheet."
+      );
+    }
+  }, [applyServerSnapshot, demoMode]);
+
+  const scheduleSnapshotRefresh = useCallback((): void => {
+    if (snapshotRefreshTimerRef.current) {
+      clearTimeout(snapshotRefreshTimerRef.current);
+    }
+
+    snapshotRefreshTimerRef.current = setTimeout(() => {
+      snapshotRefreshTimerRef.current = null;
+      void refreshLatestSnapshot();
+    }, REALTIME_SNAPSHOT_REFRESH_MS);
+  }, [refreshLatestSnapshot]);
 
   const handleSocketCellChanged = useCallback((payload: CellChangedPayload): void => {
     if (payload.sheetId !== latestSnapshotRef.current.sheet.id) {
@@ -1096,6 +1174,42 @@ export function SpreadsheetWorkspace({
     });
   }, []);
 
+  const handleFirestoreRealtimeEvent = useCallback((event: SheetRealtimeEvent): void => {
+    if (event.sheetId !== latestSnapshotRef.current.sheet.id) {
+      return;
+    }
+
+    if (event.sourceClientId === clientInstanceIdRef.current) {
+      return;
+    }
+
+    if (event.rows?.length) {
+      applySocketRows(event.rows);
+    }
+
+    if (event.requiresRefresh || !event.rows?.length) {
+      scheduleSnapshotRefresh();
+    }
+
+    const actorName =
+      event.actorId === latestSnapshotRef.current.currentUser.id
+        ? "You"
+        : event.actorName ?? "Another user";
+    const changedCount = event.cellCount ?? event.updates?.length ?? event.rowIndexes?.length ?? 0;
+    const label = changedCount === 1 ? "1 cell" : `${changedCount || "Sheet"} cells`;
+
+    setError(null);
+    setMessage(
+      event.type === "row-claimed"
+        ? `${actorName} claimed row ${event.rowIndexes?.[0] ?? ""}.`
+        : event.type === "row-unlocked"
+          ? `${actorName} unlocked row ${event.rowIndexes?.[0] ?? ""}.`
+          : event.type === "format-changed"
+            ? `${actorName} updated formatting.`
+            : `${label} updated in realtime.`
+    );
+  }, [applySocketRows, scheduleSnapshotRefresh]);
+
   const sheetSocket = useSheet({
     sheetId: snapshot.sheet.id,
     enabled: socketSyncEnabled,
@@ -1115,20 +1229,31 @@ export function SpreadsheetWorkspace({
     focusCell: socketFocusCell,
     blurCell: socketBlurCell
   } = sheetSocket;
-  const liveConnected = demoMode || (socketSyncEnabled && socketConnected);
-  const syncBadgeConnected = demoMode || !socketSyncEnabled || liveConnected;
+  const sheetRealtime = useSheetRealtime({
+    sheetId: snapshot.sheet.id,
+    enabled: firestoreSyncEnabled,
+    onEvent: handleFirestoreRealtimeEvent,
+    onError: setError
+  });
+  const socketLiveConnected = socketSyncEnabled && socketConnected;
+  const liveConnected = demoMode || socketLiveConnected || (firestoreSyncEnabled && sheetRealtime.connected);
+  const syncBadgeConnected = demoMode || (!socketSyncEnabled && !firestoreSyncEnabled) || liveConnected;
   const syncBadgeLabel = demoMode
     ? "local demo"
     : socketSyncEnabled
       ? liveConnected
         ? "live sync"
         : "connecting"
-      : "autosave";
+      : firestoreSyncEnabled
+        ? sheetRealtime.connected
+          ? "realtime"
+          : "realtime connecting"
+        : "autosave";
 
   useEffect(() => {
-    socketConnectedRef.current = liveConnected;
+    socketConnectedRef.current = socketLiveConnected;
     socketUpdateCellRef.current = (update) => {
-      if (!liveConnected) {
+      if (!socketLiveConnected) {
         return false;
       }
 
@@ -1136,7 +1261,7 @@ export function SpreadsheetWorkspace({
       return true;
     };
     socketUpdateCellsRef.current = (updates) => {
-      if (!liveConnected) {
+      if (!socketLiveConnected) {
         return false;
       }
 
@@ -1150,21 +1275,21 @@ export function SpreadsheetWorkspace({
       return true;
     };
     socketClaimRowRef.current = (cell) => {
-      if (liveConnected) {
+      if (socketLiveConnected) {
         socketClaimRow(cell.rowIndex, cell.columnKey);
       }
     };
     socketFocusCellRef.current = (cell) => {
-      if (liveConnected) {
+      if (socketLiveConnected) {
         socketFocusCell(cell.rowIndex, cell.columnKey);
       }
     };
     socketBlurCellRef.current = (cell) => {
-      if (liveConnected) {
+      if (socketLiveConnected) {
         socketBlurCell(cell.rowIndex, cell.columnKey);
       }
     };
-  }, [liveConnected, socketBlurCell, socketClaimRow, socketFocusCell, socketUpdateCell, socketUpdateCells]);
+  }, [socketBlurCell, socketClaimRow, socketFocusCell, socketLiveConnected, socketUpdateCell, socketUpdateCells]);
 
   useEffect(() => {
     if (liveConnected && saveQueueRef.current.size > 0) {
@@ -1192,6 +1317,50 @@ export function SpreadsheetWorkspace({
     setError("Live sync disconnected. Changes are queued and will retry when it reconnects.");
   }, [clearInFlightTimeout, demoMode, liveConnected, restoreCommittedRowsWithOptimisticEdits, socketSyncEnabled]);
 
+  const claimHostedRow = useCallback(async (cell: SelectedCell): Promise<void> => {
+    const currentSnapshot = latestSnapshotRef.current;
+    const targetRow = currentSnapshot.rows.find((row) => row.rowNumber === cell.rowIndex);
+
+    if (
+      !targetRow ||
+      targetRow.ownerId ||
+      rowClaimRequestsRef.current.has(cell.rowIndex)
+    ) {
+      return;
+    }
+
+    rowClaimRequestsRef.current.add(cell.rowIndex);
+
+    try {
+      const response = await fetch("/api/rows/claim", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sheetId: currentSnapshot.sheet.id,
+          rowIndex: cell.rowIndex,
+          columnKey: cell.columnKey,
+          sourceClientId: clientInstanceIdRef.current
+        })
+      });
+      const body = (await response.json().catch(() => null)) as {
+        snapshot?: SheetSnapshot;
+        error?: string;
+      } | null;
+
+      if (!response.ok || !body?.snapshot) {
+        throw new Error(body?.error ?? "Unable to claim this row.");
+      }
+
+      applyServerSnapshot(body.snapshot);
+      setError(null);
+      setMessage(`Row ${cell.rowIndex} claimed.`);
+    } catch (claimError) {
+      setError(claimError instanceof Error ? claimError.message : "Unable to claim this row.");
+    } finally {
+      rowClaimRequestsRef.current.delete(cell.rowIndex);
+    }
+  }, [applyServerSnapshot]);
+
   const focusLiveCell = useCallback((cell: SelectedCell): void => {
     if (demoMode || !socketSyncEnabled) {
       return;
@@ -1211,12 +1380,17 @@ export function SpreadsheetWorkspace({
   }, [demoMode, socketSyncEnabled]);
 
   const claimLiveRow = useCallback((cell: SelectedCell): void => {
-    if (demoMode || !socketSyncEnabled || snapshot.currentUser.role === Role.ADMIN) {
+    if (demoMode || snapshot.currentUser.role === Role.ADMIN) {
       return;
     }
 
-    socketClaimRowRef.current(cell);
-  }, [demoMode, snapshot.currentUser.role, socketSyncEnabled]);
+    if (socketSyncEnabled) {
+      socketClaimRowRef.current(cell);
+      return;
+    }
+
+    void claimHostedRow(cell);
+  }, [claimHostedRow, demoMode, snapshot.currentUser.role, socketSyncEnabled]);
 
   const blurActiveLiveCell = useCallback((): void => {
     const activeCell = activeSocketCellRef.current;
@@ -1416,7 +1590,8 @@ export function SpreadsheetWorkspace({
         startColumnKey,
         endColumnKey,
         format,
-        clear
+        clear,
+        sourceClientId: clientInstanceIdRef.current
       })
     });
 

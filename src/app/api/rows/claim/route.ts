@@ -1,12 +1,14 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { getCurrentUser } from "@/lib/auth/session";
+import { assertColumnKey } from "@/lib/constants";
 import { publishSheetRealtimeEvent } from "@/lib/firebase/sheet-realtime";
-import { SheetRuleError, unlockRow } from "@/lib/sheet/service";
+import { SheetRuleError, claimRowForEdit } from "@/lib/sheet/service";
 
-const unlockSchema = z.object({
+const claimSchema = z.object({
   sheetId: z.string().min(1),
   rowIndex: z.number().int().min(1).max(1000),
+  columnKey: z.string().length(1),
   sourceClientId: z.string().min(1).max(128).optional()
 });
 
@@ -18,15 +20,21 @@ export async function POST(request: Request): Promise<NextResponse> {
   }
 
   try {
-    const payload = unlockSchema.parse(await request.json());
-    const snapshot = await unlockRow(user, payload.sheetId, payload.rowIndex);
+    const payload = claimSchema.parse(await request.json());
+    const columnKey = assertColumnKey(payload.columnKey);
+    const snapshot = await claimRowForEdit(user, {
+      sheetId: payload.sheetId,
+      rowIndex: payload.rowIndex,
+      columnKey
+    });
 
     await publishSheetRealtimeEvent({
-      type: "row-unlocked",
+      type: "row-claimed",
       sheetId: payload.sheetId,
       actor: user,
       snapshot,
       rowIndexes: [payload.rowIndex],
+      updates: [{ row: payload.rowIndex, col: columnKey }],
       sourceClientId: payload.sourceClientId
     });
 
@@ -37,10 +45,10 @@ export async function POST(request: Request): Promise<NextResponse> {
     }
 
     if (error instanceof z.ZodError) {
-      return NextResponse.json({ error: "Invalid unlock request." }, { status: 400 });
+      return NextResponse.json({ error: "Invalid row claim request." }, { status: 400 });
     }
 
     console.error(error);
-    return NextResponse.json({ error: "Unable to unlock this row." }, { status: 500 });
+    return NextResponse.json({ error: "Unable to claim this row." }, { status: 500 });
   }
 }

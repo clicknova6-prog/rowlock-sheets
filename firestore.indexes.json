@@ -1,4 +1,25 @@
 {
   "indexes": [],
-  "fieldOverrides": []
+  "fieldOverrides": [
+    {
+      "collectionGroup": "events",
+      "fieldPath": "rows",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "events",
+      "fieldPath": "updates",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "events",
+      "fieldPath": "rowIndexes",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "events",
+      "fieldPath": "expiresAt",
+      "indexes": []
+    }
+  ]
 }

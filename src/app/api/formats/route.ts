@@ -1,7 +1,10 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { getCurrentUser } from "@/lib/auth/session";
+import { publishSheetRealtimeEvent } from "@/lib/firebase/sheet-realtime";
 import { SheetRuleError, updateCellFormats } from "@/lib/sheet/service";
+
+const sourceClientIdSchema = z.string().min(1).max(128).optional();
 
 const cellFormatPatchSchema = z
   .object({
@@ -21,8 +24,21 @@ const updateFormatSchema = z.object({
   startColumnKey: z.string().length(1),
   endColumnKey: z.string().length(1),
   format: cellFormatPatchSchema,
-  clear: z.boolean().optional()
+  clear: z.boolean().optional(),
+  sourceClientId: sourceClientIdSchema
 });
+
+function getRangeRowIndexes(startRow: number, endRow: number): number[] {
+  const minRow = Math.min(startRow, endRow);
+  const maxRow = Math.max(startRow, endRow);
+  const rowIndexes: number[] = [];
+
+  for (let rowIndex = minRow; rowIndex <= maxRow; rowIndex += 1) {
+    rowIndexes.push(rowIndex);
+  }
+
+  return rowIndexes;
+}
 
 export async function POST(request: Request): Promise<NextResponse> {
   const user = await getCurrentUser();
@@ -32,7 +48,18 @@ export async function POST(request: Request): Promise<NextResponse> {
   }
 
   try {
-    const snapshot = await updateCellFormats(user, updateFormatSchema.parse(await request.json()));
+    const payload = updateFormatSchema.parse(await request.json());
+    const snapshot = await updateCellFormats(user, payload);
+
+    await publishSheetRealtimeEvent({
+      type: "format-changed",
+      sheetId: payload.sheetId,
+      actor: user,
+      snapshot,
+      rowIndexes: getRangeRowIndexes(payload.startRow, payload.endRow),
+      sourceClientId: payload.sourceClientId
+    });
+
     return NextResponse.json({ snapshot });
   } catch (error) {
     if (error instanceof SheetRuleError) {

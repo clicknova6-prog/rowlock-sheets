@@ -13,16 +13,30 @@ rules_version = '2';
 //   - createdAt: timestamp, optional, server-managed
 //   - updatedAt: timestamp, optional, server-managed
 //
-// Collection: sheets
-// Status: reserved for the future spreadsheet Firestore migration.
-// Direct client access is denied until the data model is complete.
+// Collection: sheetRealtime/{sheetId}/events
+// Document ID: auto ID
+// Fields:
+//   - type: "cells-changed" | "format-changed" | "row-claimed" | "row-unlocked", required
+//   - sheetId: string, required, immutable by server convention
+//   - actorId: string, required, Firebase Auth uid
+//   - actorName: string, optional, display-only
+//   - sourceClientId: string, optional, per-tab dedupe id
+//   - rowIndexes: list, optional, max 1000
+//   - cellCount: number, optional, max 10000
+//   - updates: list, optional, max 10000 compact cell references
+//   - rows: list, optional, max 1000 changed row snapshots
+//   - requiresRefresh: bool, optional
+//   - createdAt: timestamp, required, server-managed
+//   - expiresAt: timestamp, optional, server-managed retention marker
 //
 // Current app access pattern:
 //   - Firebase Auth signs users in.
 //   - The Next.js server uses Firebase Admin SDK to create/update users.
 //   - Clients may read only their own user profile.
 //   - Admin users may read user profiles for admin UX.
-//   - No client may create/update/delete user profiles or sheet data directly.
+//   - The Next.js server writes spreadsheet data to Cloud SQL/MySQL.
+//   - The Next.js server writes Firestore realtime events after MySQL saves.
+//   - Clients may read realtime events, but cannot write sheet data/events directly.
 //
 // ===============================================================
 
@@ -40,13 +54,85 @@ service cloud.firestore {
       return signedIn() && userProfile().data.role == "ADMIN";
     }
 
+    function isStringInRange(value, minLength, maxLength) {
+      return value is string && value.size() >= minLength && value.size() <= maxLength;
+    }
+
+    function isOptionalStringInRange(data, field, minLength, maxLength) {
+      return !data.keys().hasAny([field]) ||
+        isStringInRange(data[field], minLength, maxLength);
+    }
+
+    function isOptionalTimestamp(data, field) {
+      return !data.keys().hasAny([field]) || data[field] is timestamp;
+    }
+
+    function isOptionalList(data, field, maxLength) {
+      return !data.keys().hasAny([field]) ||
+        (data[field] is list && data[field].size() <= maxLength);
+    }
+
+    function isOptionalBool(data, field) {
+      return !data.keys().hasAny([field]) || data[field] is bool;
+    }
+
+    function isOptionalCount(data, field, maxValue) {
+      return !data.keys().hasAny([field]) ||
+        (data[field] is number && data[field] >= 0 && data[field] <= maxValue);
+    }
+
+    function isValidUser(data) {
+      return data.keys().hasOnly(["email", "name", "role", "createdAt", "updatedAt"]) &&
+        isStringInRange(data.email, 3, 320) &&
+        isStringInRange(data.name, 1, 120) &&
+        data.role in ["ADMIN", "MEMBER"] &&
+        isOptionalTimestamp(data, "createdAt") &&
+        isOptionalTimestamp(data, "updatedAt");
+    }
+
+    function isValidRealtimeEvent(sheetId, data) {
+      return data.keys().hasOnly([
+          "type",
+          "sheetId",
+          "actorId",
+          "actorName",
+          "sourceClientId",
+          "rowIndexes",
+          "cellCount",
+          "updates",
+          "rows",
+          "requiresRefresh",
+          "createdAt",
+          "expiresAt"
+        ]) &&
+        data.sheetId == sheetId &&
+        data.type in ["cells-changed", "format-changed", "row-claimed", "row-unlocked"] &&
+        isStringInRange(data.actorId, 1, 128) &&
+        isOptionalStringInRange(data, "actorName", 1, 120) &&
+        isOptionalStringInRange(data, "sourceClientId", 1, 128) &&
+        isOptionalList(data, "rowIndexes", 1000) &&
+        isOptionalList(data, "updates", 10000) &&
+        isOptionalList(data, "rows", 1000) &&
+        isOptionalCount(data, "cellCount", 10000) &&
+        isOptionalBool(data, "requiresRefresh") &&
+        data.createdAt is timestamp &&
+        isOptionalTimestamp(data, "expiresAt");
+    }
+
     match /users/{userId} {
-      allow read: if signedIn() && (request.auth.uid == userId || isAdmin());
+      allow read: if signedIn() &&
+        (request.auth.uid == userId || isAdmin()) &&
+        isValidUser(resource.data);
       allow create, update, delete: if false;
     }
 
-    match /sheets/{sheetId}/{document=**} {
+    match /sheetRealtime/{sheetId} {
       allow read, write: if false;
+
+      match /events/{eventId} {
+        allow read: if signedIn() && isValidRealtimeEvent(sheetId, resource.data);
+        allow create, update, delete: if false;
+      }
     }
 
     match /{document=**} {

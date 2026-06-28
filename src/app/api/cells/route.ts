@@ -1,13 +1,18 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { getCurrentUser } from "@/lib/auth/session";
+import { assertColumnKey } from "@/lib/constants";
+import { publishSheetRealtimeEvent } from "@/lib/firebase/sheet-realtime";
 import { SheetRuleError, bulkUpdateCells, updateCell } from "@/lib/sheet/service";
+
+const sourceClientIdSchema = z.string().min(1).max(128).optional();
 
 const updateCellSchema = z.object({
   sheetId: z.string().min(1),
   rowIndex: z.number().int().min(1).max(1000),
   columnKey: z.string().length(1),
-  value: z.string().max(10000)
+  value: z.string().max(10000),
+  sourceClientId: sourceClientIdSchema
 });
 
 const bulkUpdateSchema = z.object({
@@ -21,7 +26,8 @@ const bulkUpdateSchema = z.object({
       })
     )
     .min(1)
-    .max(10000)
+    .max(10000),
+  sourceClientId: sourceClientIdSchema
 });
 
 export async function POST(request: Request): Promise<NextResponse> {
@@ -33,10 +39,42 @@ export async function POST(request: Request): Promise<NextResponse> {
 
   try {
     const body = await request.json();
-    const snapshot =
-      "updates" in body
-        ? await bulkUpdateCells(user, bulkUpdateSchema.parse(body))
-        : await updateCell(user, updateCellSchema.parse(body));
+
+    if ("updates" in body) {
+      const payload = bulkUpdateSchema.parse(body);
+      const snapshot = await bulkUpdateCells(user, payload);
+
+      await publishSheetRealtimeEvent({
+        type: "cells-changed",
+        sheetId: payload.sheetId,
+        actor: user,
+        snapshot,
+        rowIndexes: payload.updates.map((update) => update.rowIndex),
+        cellCount: payload.updates.length,
+        updates: payload.updates.map((update) => ({
+          row: update.rowIndex,
+          col: assertColumnKey(update.columnKey)
+        })),
+        sourceClientId: payload.sourceClientId
+      });
+
+      return NextResponse.json({ snapshot });
+    }
+
+    const payload = updateCellSchema.parse(body);
+    const snapshot = await updateCell(user, payload);
+
+    await publishSheetRealtimeEvent({
+      type: "cells-changed",
+      sheetId: payload.sheetId,
+      actor: user,
+      snapshot,
+      rowIndexes: [payload.rowIndex],
+      cellCount: 1,
+      updates: [{ row: payload.rowIndex, col: assertColumnKey(payload.columnKey) }],
+      sourceClientId: payload.sourceClientId
+    });
+
     return NextResponse.json({ snapshot });
   } catch (error) {
     if (error instanceof SheetRuleError) {

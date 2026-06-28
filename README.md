@@ -12,7 +12,7 @@ A production-oriented spreadsheet SaaS built with Next.js App Router, React, Typ
 - Allowed-value validation per column
 - Multi-condition count-limit rule engine
 - Formula support through HyperFormula, including `SUM` and arithmetic
-- Socket.io live cell updates with per-sheet rooms and transient edit locks
+- Firestore realtime change events on Firebase App Hosting, plus Socket.io live sync for custom-server deployments
 - Admin spreadsheet formatting: range/row fills, text color, bold/italic/underline, alignment, clear formatting, and alternating row colors
 - Admin dashboard for permissions, validation rules, conditional rules, row ownership, and audit history
 - Prisma MySQL schema, migration, and seed data
@@ -49,12 +49,14 @@ NEXT_PUBLIC_APP_URL="https://your-domain.com"
 DB_CONNECTION_LIMIT="5"
 SOCKET_CORS_ORIGIN="https://your-domain.com"
 NEXT_PUBLIC_ENABLE_SOCKET_SYNC="true"
+NEXT_PUBLIC_ENABLE_FIRESTORE_SYNC="true"
 ```
 
 `AUTH_SECRET` signs session cookies. Change it before production.
 `DB_CONNECTION_LIMIT` should stay above 1 because sheet saves and snapshots use multiple database operations.
 `SOCKET_CORS_ORIGIN` is optional for same-origin hosting, but set it to your production domain if Hostinger serves the app behind a domain/proxy that requires explicit Socket.io CORS.
 `NEXT_PUBLIC_ENABLE_SOCKET_SYNC` should stay `true` for local/custom-server deployments and `false` for Firebase App Hosting, where cell edits save through the REST autosave endpoint.
+`NEXT_PUBLIC_ENABLE_FIRESTORE_SYNC` should stay `true` on Firebase App Hosting so other open browsers receive realtime change events after MySQL saves.
 
 ## Local Development
 
@@ -127,6 +129,14 @@ Each user profile contains:
 }
 ```
 
+Firestore spreadsheet realtime events are stored in:
+
+```txt
+sheetRealtime/{sheetId}/events/{eventId}
+```
+
+These event documents are a lightweight notification layer only. The actual spreadsheet source of truth remains Cloud SQL/MySQL through Prisma.
+
 Set `FIREBASE_ADMIN_EMAILS` to a comma-separated list of emails that should become admins the first time they sign in. It is currently set to `clicknova6@gmail.com` in `apphosting.yaml`. Existing Firestore user documents keep their saved role.
 
 Cloud Firestore is enabled and the default Standard database has been created in `nam5`.
@@ -139,11 +149,11 @@ npx -y firebase-tools@latest deploy --only firestore --project jobsheet-291c1
 
 ## Firebase App Hosting Deployment
 
-Firebase is the chosen deployment target. The current Firebase phase uses Firebase Authentication and Firestore user profiles while the spreadsheet engine is still being migrated from Prisma/MySQL. A later Firebase-native phase can move sheet cell storage/live sync fully into Firestore.
+Firebase is the chosen deployment target. The current Firebase phase uses Firebase Authentication, Firestore user profiles/realtime events, and Cloud SQL MySQL for durable spreadsheet data.
 
 ### App Hosting Runtime Shape
 
-Firebase App Hosting uses the framework adapter, so it does not run the custom Socket.io server entry. `apphosting.yaml` sets `NEXT_PUBLIC_ENABLE_SOCKET_SYNC=false`; hosted cell edits save through `/api/cells` autosave instead.
+Firebase App Hosting uses the framework adapter, so it does not rely on Socket.io. `apphosting.yaml` sets `NEXT_PUBLIC_ENABLE_SOCKET_SYNC=false`; hosted cell edits save through `/api/cells` autosave, then Firestore broadcasts compact realtime events to other open browsers.
 
 `apphosting.yaml` currently keeps `maxInstances: 1` to control Cloud SQL cost and connection pressure while usage is being validated. You can raise it later after checking database connections and write behavior under real employee traffic.
 
@@ -186,7 +196,7 @@ Then seed only if this is a brand-new empty database:
 npm run seed
 ```
 
-`npm run build` already runs `prisma generate`, `next build`, and the custom server build. On Firebase App Hosting, the framework adapter serves the Next.js app and the spreadsheet uses REST autosave. On custom-server hosts, `npm run start` runs the generated root `server.js`, which mounts Socket.io at `/socket.io`.
+`npm run build` already runs `prisma generate`, `next build`, and the custom server build. On Firebase App Hosting, the framework adapter serves the Next.js app and the spreadsheet uses REST autosave plus Firestore realtime notifications. On custom-server hosts, `npm run start` runs the generated root `server.js`, which mounts Socket.io at `/socket.io`.
 
 ## Hostinger Business Deployment
 
@@ -239,12 +249,12 @@ After changing environment variables, restart the Node.js app from Hostinger. Th
 ### WebSocket Notes
 
 - Local/custom-server deployments can use one persistent Socket.io WebSocket connection per browser tab instead of repeated REST polling.
-- Firebase App Hosting sets `NEXT_PUBLIC_ENABLE_SOCKET_SYNC=false`, so cell value changes use `/api/cells` REST autosave.
+- Firebase App Hosting sets `NEXT_PUBLIC_ENABLE_SOCKET_SYNC=false`, so cell value changes use `/api/cells` REST autosave and Firestore event listeners.
 - Each sheet joins a private room named `sheet:{sheetId}`.
 - The client forces the `websocket` transport and does not use Socket.io HTTP long-polling fallback.
 - Large paste operations are saved in batches. Socket.io uses 50-cell chunks; hosted REST autosave uses larger API batches.
 - Pasted batches above 100 cells keep a summary audit entry instead of one audit row per cell, which keeps large imports practical on shared hosting.
-- Single-process Socket.io is intentional for local/custom-server deployments. If socket sync is enabled in production with multiple app instances, move Socket.io events to Redis, Firestore, or another shared pub-sub layer first.
+- Single-process Socket.io is intentional for local/custom-server deployments. Firebase App Hosting uses Firestore events instead of Socket.io for cross-browser updates.
 - REST endpoints handle initial page load, Firebase-hosted autosave, admin formatting, and cell history.
 
 ## Database Schema Overview

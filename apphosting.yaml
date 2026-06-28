@@ -1,5 +1,5 @@
 # Firebase App Hosting runs this Next.js custom server through `npm run start`.
-# Keep maxInstances at 1 until Socket.io broadcasts are moved to Redis/Firestore pub-sub.
+# Keep maxInstances conservative while Cloud SQL usage is being validated.
 runConfig:
   cpu: 1
   memoryMiB: 1024
@@ -19,6 +19,11 @@ env:
       - RUNTIME
   - variable: NEXT_PUBLIC_ENABLE_SOCKET_SYNC
     value: "false"
+    availability:
+      - BUILD
+      - RUNTIME
+  - variable: NEXT_PUBLIC_ENABLE_FIRESTORE_SYNC
+    value: "true"
     availability:
       - BUILD
       - RUNTIME
