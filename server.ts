@@ -1,10 +1,10 @@
 import "dotenv/config";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { createServer } from "node:http";
-import next from "next";
 import { Server, type Socket } from "socket.io";
 import { Role } from "@/generated/prisma/enums";
-import { getUserFromSessionToken } from "@/lib/auth/session";
-import { SESSION_COOKIE } from "@/lib/auth/token";
+import { SESSION_COOKIE, verifySessionToken } from "@/lib/auth/token";
+import { getFirebaseActorByUid } from "@/lib/firebase/users";
 import { assertColumnKey, getCellKey, isValidRowIndex } from "@/lib/constants";
 import { prisma } from "@/lib/db";
 import { SheetRuleError, bulkUpdateCells, claimRowForEdit, updateCell } from "@/lib/sheet/service";
@@ -21,6 +21,12 @@ import type {
   ServerToClientEvents
 } from "@/lib/sheet/socket-types";
 import type { Actor } from "@/lib/sheet/types";
+
+const globalScope = globalThis as typeof globalThis & {
+  AsyncLocalStorage?: typeof AsyncLocalStorage;
+};
+
+globalScope.AsyncLocalStorage ??= AsyncLocalStorage;
 
 const dev = process.env.NODE_ENV !== "production";
 
@@ -76,6 +82,16 @@ function parseCookies(cookieHeader: string | undefined): Record<string, string> 
 
 function roomName(sheetId: string): string {
   return `sheet:${sheetId}`;
+}
+
+async function getUserFromSessionToken(token: string): Promise<Actor | null> {
+  const session = await verifySessionToken(token);
+
+  if (!session) {
+    return null;
+  }
+
+  return (await getFirebaseActorByUid(session.id)) ?? session;
 }
 
 function socketLockKey(sheetId: string, row: number, col: string): string {
@@ -603,6 +619,7 @@ async function updateCellsFromSocket(
 }
 
 async function main(): Promise<void> {
+  const { default: next } = await import("next");
   const app = next({ dev, hostname, port });
   const handle = app.getRequestHandler();
 

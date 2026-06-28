@@ -29,6 +29,16 @@ rules_version = '2';
 //   - createdAt: timestamp, required, server-managed
 //   - expiresAt: timestamp, optional, server-managed retention marker
 //
+// Collection: sheetPresence/{sheetId}/users
+// Document ID: Firebase Auth uid
+// Fields:
+//   - sheetId: string, required, must match parent path
+//   - userId: string, required, immutable by path
+//   - name: string, required, public display name copied from server-managed profile
+//   - role: "ADMIN" | "MEMBER", required, copied from server-managed profile
+//   - color: string, required, hex color for UI avatar
+//   - updatedAt: timestamp, required, client-written with serverTimestamp()
+//
 // Current app access pattern:
 //   - Firebase Auth signs users in.
 //   - The Next.js server uses Firebase Admin SDK to create/update users.
@@ -37,6 +47,8 @@ rules_version = '2';
 //   - The Next.js server writes spreadsheet data to Cloud SQL/MySQL.
 //   - The Next.js server writes Firestore realtime events after MySQL saves.
 //   - Clients may read realtime events, but cannot write sheet data/events directly.
+//   - Clients write only their own sheet presence heartbeat.
+//   - Admin clients may list presence heartbeats for the current sheet.
 //
 // ===============================================================
 
@@ -48,6 +60,10 @@ service cloud.firestore {
 
     function userProfile() {
       return get(/databases/$(database)/documents/users/$(request.auth.uid));
+    }
+
+    function profileFor(userId) {
+      return get(/databases/$(database)/documents/users/$(userId));
     }
 
     function isAdmin() {
@@ -79,6 +95,12 @@ service cloud.firestore {
     function isOptionalCount(data, field, maxValue) {
       return !data.keys().hasAny([field]) ||
         (data[field] is number && data[field] >= 0 && data[field] <= maxValue);
+    }
+
+    function isHexColor(value) {
+      return value is string &&
+        value.size() == 7 &&
+        value.matches("^#[0-9A-Fa-f]{6}$");
     }
 
     function isValidUser(data) {
@@ -119,6 +141,23 @@ service cloud.firestore {
         isOptionalTimestamp(data, "expiresAt");
     }
 
+    function isValidPresenceShape(sheetId, userId, data) {
+      return data.keys().hasOnly(["sheetId", "userId", "name", "role", "color", "updatedAt"]) &&
+        data.sheetId == sheetId &&
+        data.userId == userId &&
+        isStringInRange(data.name, 1, 120) &&
+        data.role in ["ADMIN", "MEMBER"] &&
+        isHexColor(data.color) &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidPresenceWrite(sheetId, userId, data) {
+      return isValidPresenceShape(sheetId, userId, data) &&
+        data.updatedAt == request.time &&
+        profileFor(userId).data.name == data.name &&
+        profileFor(userId).data.role == data.role;
+    }
+
     match /users/{userId} {
       allow read: if signedIn() &&
         (request.auth.uid == userId || isAdmin()) &&
@@ -133,6 +172,21 @@ service cloud.firestore {
         allow get: if signedIn() && isValidRealtimeEvent(sheetId, resource.data);
         allow list: if signedIn();
         allow create, update, delete: if false;
+      }
+    }
+
+    match /sheetPresence/{sheetId} {
+      allow read, write: if false;
+
+      match /users/{userId} {
+        allow get: if signedIn() &&
+          (request.auth.uid == userId || isAdmin()) &&
+          isValidPresenceShape(sheetId, userId, resource.data);
+        allow list: if isAdmin();
+        allow create, update: if signedIn() &&
+          request.auth.uid == userId &&
+          isValidPresenceWrite(sheetId, userId, request.resource.data);
+        allow delete: if signedIn() && request.auth.uid == userId;
       }
     }
 

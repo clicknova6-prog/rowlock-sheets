@@ -27,6 +27,7 @@ import {
   TextAlignEnd,
   TextAlignStart,
   Underline,
+  UsersRound,
   X
 } from "lucide-react";
 import {
@@ -46,6 +47,7 @@ import { Role } from "@/generated/prisma/enums";
 import { MAX_ROWS, getCellKey } from "@/lib/constants";
 import type { ColumnKey } from "@/lib/constants";
 import { useSheet } from "@/hooks/useSheet";
+import { useSheetPresence } from "@/hooks/useSheetPresence";
 import { useSheetRealtime } from "@/hooks/useSheetRealtime";
 import { applyDemoCellFormatUpdate, applyDemoCellUpdate } from "@/lib/sheet/demo-engine";
 import { FORMAT_COLOR_PALETTE, createDefaultCellFormat } from "@/lib/sheet/formatting";
@@ -149,6 +151,16 @@ function isCellLockedByOther(
 
 function getUserInitials(userId: string): string {
   return userId.slice(0, 2).toUpperCase();
+}
+
+function getDisplayInitials(name: string, userId: string): string {
+  const nameParts = name.trim().split(/\s+/).filter(Boolean);
+
+  if (nameParts.length >= 2) {
+    return `${nameParts[0][0]}${nameParts[1][0]}`.toUpperCase();
+  }
+
+  return (nameParts[0] ?? userId).slice(0, 2).toUpperCase();
 }
 
 function getRenderedCellValue(row: SheetGridRow, columnKey: ColumnKey): string {
@@ -1235,6 +1247,12 @@ export function SpreadsheetWorkspace({
     onEvent: handleFirestoreRealtimeEvent,
     onError: setError
   });
+  const sheetPresence = useSheetPresence({
+    sheetId: snapshot.sheet.id,
+    currentUser: snapshot.currentUser,
+    enabled: !demoMode && process.env.NEXT_PUBLIC_ENABLE_FIRESTORE_PRESENCE !== "false",
+    watch: isAdmin
+  });
   const socketLiveConnected = socketSyncEnabled && socketConnected;
   const liveConnected = demoMode || socketLiveConnected || (firestoreSyncEnabled && sheetRealtime.connected);
   const syncBadgeConnected = demoMode || (!socketSyncEnabled && !firestoreSyncEnabled) || liveConnected;
@@ -1249,6 +1267,21 @@ export function SpreadsheetWorkspace({
           ? "realtime"
           : "realtime connecting"
         : "autosave";
+  const activeMembers = useMemo(
+    () => sheetPresence.users.filter((user) => user.role === Role.MEMBER),
+    [sheetPresence.users]
+  );
+  const activeMemberNames = useMemo(() => {
+    const visibleNames = activeMembers.slice(0, 3).map((user) => user.name);
+    const extraCount = activeMembers.length - visibleNames.length;
+
+    return `${visibleNames.join(", ")}${extraCount > 0 ? ` +${extraCount}` : ""}`;
+  }, [activeMembers]);
+  const activeMembersTitle = sheetPresence.connected
+    ? activeMembers.length > 0
+      ? `Active members: ${activeMembers.map((user) => user.name).join(", ")}`
+      : "No members are active on this sheet."
+    : "Active member presence is connecting.";
 
   useEffect(() => {
     socketConnectedRef.current = socketLiveConnected;
@@ -2091,6 +2124,37 @@ export function SpreadsheetWorkspace({
               <ShieldCheck size={14} />
               {snapshot.currentUser.role === Role.ADMIN ? "admin" : "member"}
             </span>
+            {isAdmin ? (
+              <span
+                className="inline-flex max-w-full items-center gap-1 rounded-md border border-[color:var(--line)] px-2 py-1"
+                title={activeMembersTitle}
+              >
+                <UsersRound size={14} />
+                <span>
+                  {sheetPresence.connected
+                    ? `${activeMembers.length} active member${activeMembers.length === 1 ? "" : "s"}`
+                    : "members connecting"}
+                </span>
+                {activeMemberNames ? (
+                  <span className="hidden max-w-44 truncate sm:inline">
+                    {activeMemberNames}
+                  </span>
+                ) : null}
+                {activeMembers.length > 0 ? (
+                  <span className="ml-1 inline-flex -space-x-1">
+                    {activeMembers.slice(0, 5).map((user) => (
+                      <span
+                        key={user.userId}
+                        className="grid h-5 w-5 place-items-center rounded-full border border-[color:var(--panel)] text-[9px] font-semibold leading-none text-white"
+                        style={{ backgroundColor: user.color }}
+                      >
+                        {getDisplayInitials(user.name, user.userId)}
+                      </span>
+                    ))}
+                  </span>
+                ) : null}
+              </span>
+            ) : null}
             <span className="inline-flex items-center gap-1 rounded-md border border-[color:var(--line)] px-2 py-1">
               <Lock size={14} />
               {countEditableColumns(snapshot)} member columns
