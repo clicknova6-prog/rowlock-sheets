@@ -7,13 +7,14 @@ import { SESSION_COOKIE, verifySessionToken } from "@/lib/auth/token";
 import { getFirebaseActorByUid } from "@/lib/firebase/users";
 import { assertColumnKey, getCellKey, isValidRowIndex } from "@/lib/constants";
 import { prisma } from "@/lib/db";
-import { SheetRuleError, bulkUpdateCells, claimRowForEdit, updateCell } from "@/lib/sheet/service";
+import { SheetRuleError, bulkUpdateCells, claimRowForEdit } from "@/lib/sheet/service";
 import type {
   CellBlurPayload,
   CellFocusPayload,
   CellLockedPayload,
   CellUnlockedPayload,
   CellUpdatePayload,
+  CellUpdateItemPayload,
   CellsUpdatePayload,
   ClientToServerEvents,
   JoinSheetPayload,
@@ -51,8 +52,12 @@ function getCliOption(...names: string[]): string | undefined {
 
 const hostname = getCliOption("hostname", "host", "-H") ?? process.env.HOST ?? "0.0.0.0";
 const port = Number(getCliOption("port", "-p") ?? process.env.PORT ?? 3000);
-const MAX_SOCKET_BULK_UPDATES = 50;
+const MAX_SOCKET_BULK_UPDATES = 1000;
+const SOCKET_WRITE_FLUSH_DELAY_MS = 1000;
+const SOCKET_MEMBER_WRITE_FLUSH_DELAY_MS = 250;
+const SOCKET_WRITE_FLUSH_CHUNK_SIZE = 1000;
 const sheetWriteQueues = new Map<string, Promise<void>>();
+const pendingCellWriteBuffers = new Map<string, PendingCellWriteBuffer>();
 
 type SheetSocket = Socket<ClientToServerEvents, ServerToClientEvents> & {
   data: {
@@ -61,6 +66,14 @@ type SheetSocket = Socket<ClientToServerEvents, ServerToClientEvents> & {
     lockKeys: Set<string>;
   };
 };
+
+interface PendingCellWriteBuffer {
+  sheetId: string;
+  actor: Actor;
+  updates: Map<string, CellUpdateItemPayload>;
+  socketIds: Set<string>;
+  timer: ReturnType<typeof setTimeout> | null;
+}
 
 function parseCookies(cookieHeader: string | undefined): Record<string, string> {
   if (!cookieHeader) {
@@ -155,6 +168,151 @@ function emitCellError(
     col: payload.col,
     message: payload.message
   });
+}
+
+function pendingCellWriteKey(sheetId: string, userId: string): string {
+  return `${sheetId}:${userId}`;
+}
+
+function schedulePendingCellWrite(
+  io: Server<ClientToServerEvents, ServerToClientEvents>,
+  socket: SheetSocket,
+  sheetId: string,
+  updates: CellUpdateItemPayload[]
+): void {
+  const key = pendingCellWriteKey(sheetId, socket.data.user.id);
+  let buffer = pendingCellWriteBuffers.get(key);
+
+  if (!buffer) {
+    buffer = {
+      sheetId,
+      actor: socket.data.user,
+      updates: new Map(),
+      socketIds: new Set(),
+      timer: null
+    };
+    pendingCellWriteBuffers.set(key, buffer);
+  }
+
+  buffer.actor = socket.data.user;
+  buffer.socketIds.add(socket.id);
+
+  for (const update of updates) {
+    buffer.updates.set(getCellKey(update.row, update.col), update);
+  }
+
+  if (buffer.updates.size >= SOCKET_WRITE_FLUSH_CHUNK_SIZE) {
+    if (buffer.timer) {
+      clearTimeout(buffer.timer);
+      buffer.timer = null;
+    }
+
+    void flushPendingCellWriteBuffer(io, key);
+    return;
+  }
+
+  if (!buffer.timer) {
+    const flushDelay =
+      socket.data.user.role === Role.MEMBER
+        ? SOCKET_MEMBER_WRITE_FLUSH_DELAY_MS
+        : SOCKET_WRITE_FLUSH_DELAY_MS;
+
+    buffer.timer = setTimeout(() => {
+      const pendingBuffer = pendingCellWriteBuffers.get(key);
+
+      if (pendingBuffer) {
+        pendingBuffer.timer = null;
+      }
+
+      void flushPendingCellWriteBuffer(io, key);
+    }, flushDelay);
+  }
+}
+
+async function flushPendingCellWriteBuffer(
+  io: Server<ClientToServerEvents, ServerToClientEvents>,
+  key: string
+): Promise<void> {
+  const buffer = pendingCellWriteBuffers.get(key);
+
+  if (!buffer) {
+    return;
+  }
+
+  if (buffer.timer) {
+    clearTimeout(buffer.timer);
+    buffer.timer = null;
+  }
+
+  const updates = [...buffer.updates.values()].slice(0, SOCKET_WRITE_FLUSH_CHUNK_SIZE);
+
+  if (updates.length === 0) {
+    pendingCellWriteBuffers.delete(key);
+    return;
+  }
+
+  for (const update of updates) {
+    buffer.updates.delete(getCellKey(update.row, update.col));
+  }
+
+  const socketIds = new Set(buffer.socketIds);
+  const { actor, sheetId } = buffer;
+
+  if (buffer.updates.size === 0) {
+    pendingCellWriteBuffers.delete(key);
+  } else if (!buffer.timer) {
+    buffer.timer = setTimeout(() => {
+      const pendingBuffer = pendingCellWriteBuffers.get(key);
+
+      if (pendingBuffer) {
+        pendingBuffer.timer = null;
+      }
+
+      void flushPendingCellWriteBuffer(io, key);
+    }, 0);
+  }
+
+  try {
+    const snapshot = await enqueueSheetWrite(sheetId, () =>
+      bulkUpdateCells(actor, {
+        sheetId,
+        updates: updates.map((update) => ({
+          rowIndex: update.row,
+          columnKey: update.col,
+          value: update.value
+        }))
+      })
+    );
+
+    io.to(roomName(sheetId)).emit("cells-changed", {
+      sheetId,
+      updates,
+      userId: actor.id,
+      rows: snapshot.rows,
+      persisted: true
+    });
+  } catch (error) {
+    const message =
+      error instanceof SheetRuleError
+        ? error.message
+        : "Some live changes could not be saved. Refreshing the sheet from the database.";
+
+    for (const socketId of socketIds) {
+      io.to(socketId).emit("cell-error", {
+        sheetId,
+        message
+      });
+    }
+
+    io.to(roomName(sheetId)).emit("cell-error", {
+      sheetId,
+      message: "Some live changes could not be saved. Refreshing the sheet from the database."
+    });
+
+    if (!(error instanceof SheetRuleError)) {
+      console.error(error);
+    }
+  }
 }
 
 async function acquireCellLock(
@@ -456,51 +614,15 @@ async function updateCellFromSocket(
 ): Promise<void> {
   const input = normalizeCellPayload(payload);
 
-  if (!isValidRowIndex(input.row)) {
-    emitCellError(socket, { ...input, message: "Rows must be between 1 and 1000." });
-    return;
-  }
-
-  if (input.value.length > 10000) {
-    emitCellError(socket, { ...input, message: "Cell value is too long." });
-    return;
-  }
-
-  const existingLock = await prisma.cell.findUnique({
-    where: {
-      sheetId_rowIndex_columnKey: {
-        sheetId: input.sheetId,
-        rowIndex: input.row,
-        columnKey: input.col
+  await updateCellsFromSocket(io, socket, {
+    sheetId: input.sheetId,
+    updates: [
+      {
+        row: input.row,
+        col: input.col,
+        value: input.value
       }
-    },
-    select: { lockedBy: true }
-  });
-
-  if (existingLock?.lockedBy && existingLock.lockedBy !== socket.data.user.id) {
-    emitCellError(socket, {
-      ...input,
-      message: "This cell is currently being edited by another user."
-    });
-    return;
-  }
-
-  const snapshot = await updateCell(socket.data.user, {
-    sheetId: input.sheetId,
-    rowIndex: input.row,
-    columnKey: input.col,
-    value: input.value
-  });
-  const row = snapshot.rows.find((item) => item.rowNumber === input.row);
-  const value = row ? String(row[input.col] ?? "") : input.value;
-
-  io.to(roomName(input.sheetId)).emit("cell-changed", {
-    sheetId: input.sheetId,
-    row: input.row,
-    col: input.col,
-    value,
-    userId: socket.data.user.id,
-    rows: snapshot.rows
+    ]
   });
 }
 
@@ -601,21 +723,14 @@ async function updateCellsFromSocket(
     return;
   }
 
-  const snapshot = await bulkUpdateCells(socket.data.user, {
-    sheetId: input.sheetId,
-    updates: input.updates.map((update) => ({
-      rowIndex: update.row,
-      columnKey: update.col,
-      value: update.value
-    }))
-  });
-
   io.to(roomName(input.sheetId)).emit("cells-changed", {
     sheetId: input.sheetId,
     updates: input.updates,
     userId: socket.data.user.id,
-    rows: snapshot.rows
+    persisted: false
   });
+
+  schedulePendingCellWrite(io, socket, input.sheetId, input.updates);
 }
 
 async function main(): Promise<void> {
@@ -704,9 +819,7 @@ async function main(): Promise<void> {
     });
 
     sheetSocket.on("cell-update", (payload) => {
-      void enqueueSheetWrite(payload.sheetId, () =>
-        updateCellFromSocket(io, sheetSocket, payload)
-      ).catch((error: unknown) => {
+      void updateCellFromSocket(io, sheetSocket, payload).catch((error: unknown) => {
         if (error instanceof SheetRuleError) {
           emitCellError(sheetSocket, { ...payload, message: error.message });
           return;
@@ -718,9 +831,7 @@ async function main(): Promise<void> {
     });
 
     sheetSocket.on("cells-update", (payload) => {
-      void enqueueSheetWrite(payload.sheetId, () =>
-        updateCellsFromSocket(io, sheetSocket, payload)
-      ).catch((error: unknown) => {
+      void updateCellsFromSocket(io, sheetSocket, payload).catch((error: unknown) => {
         if (error instanceof SheetRuleError) {
           emitCellError(sheetSocket, {
             sheetId: payload.sheetId,

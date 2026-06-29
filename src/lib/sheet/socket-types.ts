@@ -48,7 +48,8 @@ export interface CellsChangedPayload {
   sheetId: string;
   updates: CellUpdateItemPayload[];
   userId: string;
-  rows: SheetGridRow[];
+  rows?: SheetGridRow[];
+  persisted?: boolean;
 }
 
 export interface RowClaimedPayload {

@@ -128,7 +128,7 @@ interface FormatButtonProps {
 const CELL_AUTOSAVE_DEBOUNCE_MS = 750;
 const BULK_AUTOSAVE_DEBOUNCE_MS = 150;
 const AUTOSAVE_MAX_BATCH_SIZE = 200;
-const SOCKET_BULK_UPDATE_LIMIT = 50;
+const SOCKET_BULK_UPDATE_LIMIT = 1000;
 const REST_BULK_UPDATE_LIMIT = 200;
 const LIVE_SYNC_ACK_TIMEOUT_MS = 300000;
 const REALTIME_SNAPSHOT_REFRESH_MS = 400;
@@ -1481,15 +1481,16 @@ export function SpreadsheetWorkspace({
     if (payload.rows) {
       applySocketRows(payload.rows);
     } else {
-      applySocketRows(
-        applyUpdatesToRows(latestSnapshotRef.current.rows, [
-          {
-            rowIndex: payload.row,
-            columnKey: payload.col,
-            value: payload.value
-          }
-        ])
-      );
+      const nextRows = applyUpdatesToRows(rowsRef.current, [
+        {
+          rowIndex: payload.row,
+          columnKey: payload.col,
+          value: payload.value
+        }
+      ]);
+
+      setRows(nextRows);
+      rowsRef.current = nextRows;
     }
 
     setError(null);
@@ -1509,12 +1510,31 @@ export function SpreadsheetWorkspace({
       finishInFlightUpdates(payload.updates);
     }
 
-    applySocketRows(payload.rows);
+    if (payload.rows) {
+      applySocketRows(payload.rows);
+    } else {
+      const nextRows = applyUpdatesToRows(
+        rowsRef.current,
+        payload.updates.map((update) => ({
+          rowIndex: update.row,
+          columnKey: update.col,
+          value: update.value
+        }))
+      );
+
+      setRows(nextRows);
+      rowsRef.current = nextRows;
+    }
+
     setError(null);
     setMessage(
       payload.userId === latestSnapshotRef.current.currentUser.id
-        ? `${payload.updates.length} cells synced.`
-        : `${payload.updates.length} cells updated live.`
+        ? payload.persisted === false
+          ? `${payload.updates.length} cells sent to live sync.`
+          : `${payload.updates.length} cells saved.`
+        : payload.persisted === true
+          ? `${payload.updates.length} live cells saved.`
+          : `${payload.updates.length} cells updated live.`
     );
   }, [applySocketRows, finishInFlightUpdates]);
 
@@ -1555,9 +1575,16 @@ export function SpreadsheetWorkspace({
     }
 
     restoreCommittedRowsWithOptimisticEdits();
+    scheduleSnapshotRefresh();
     setMessage(null);
     setError(payload.message);
-  }, [clearInFlightTimeout, finishInFlightUpdate, restoreCommittedRowsWithOptimisticEdits, scheduleQueuedSave]);
+  }, [
+    clearInFlightTimeout,
+    finishInFlightUpdate,
+    restoreCommittedRowsWithOptimisticEdits,
+    scheduleQueuedSave,
+    scheduleSnapshotRefresh
+  ]);
 
   const handleSocketCellLocked = useCallback((payload: CellLockedPayload): void => {
     if (payload.sheetId !== latestSnapshotRef.current.sheet.id) {
