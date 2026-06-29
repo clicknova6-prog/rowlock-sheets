@@ -603,7 +603,7 @@ function getCellTextStyle(format: CellFormatState): CSSProperties | undefined {
   const style: CSSProperties = {};
 
   if (format.textColor) {
-    style.color = format.textColor;
+    style.color = getThemeAwareTextColor(format.textColor);
   }
 
   if (format.bold) {
@@ -631,7 +631,9 @@ function getReadableTextColorForBackground(backgroundColor: string | undefined):
   }
 
   if (!backgroundColor || !/^#[0-9a-f]{6}$/i.test(backgroundColor)) {
-    return undefined;
+    return backgroundColor?.startsWith("var(--grid-fill-")
+      ? "var(--grid-fill-text)"
+      : undefined;
   }
 
   const red = Number.parseInt(backgroundColor.slice(1, 3), 16);
@@ -642,12 +644,38 @@ function getReadableTextColorForBackground(backgroundColor: string | undefined):
   return luminance > 0.55 ? "#111827" : "#f8fafc";
 }
 
+function getThemeAwareTextColor(textColor: string | null | undefined): string | undefined {
+  switch (textColor?.toLowerCase()) {
+    case "#000000":
+    case "#111827":
+      return "var(--text)";
+    default:
+      return textColor ?? undefined;
+  }
+}
+
 function getThemeAwareCellBackgroundColor(backgroundColor: string | null | undefined): string | undefined {
   switch (backgroundColor?.toLowerCase()) {
     case "#ffffff":
       return "var(--grid-cell-bg)";
     case "#f8fafc":
       return "var(--grid-alt-even-bg)";
+    case "#fee2e2":
+      return "var(--grid-fill-red-bg)";
+    case "#ffedd5":
+      return "var(--grid-fill-orange-bg)";
+    case "#fef3c7":
+      return "var(--grid-fill-yellow-bg)";
+    case "#dcfce7":
+      return "var(--grid-fill-green-bg)";
+    case "#ccfbf1":
+      return "var(--grid-fill-teal-bg)";
+    case "#dbeafe":
+      return "var(--grid-fill-blue-bg)";
+    case "#ede9fe":
+      return "var(--grid-fill-violet-bg)";
+    case "#fce7f3":
+      return "var(--grid-fill-pink-bg)";
     default:
       return backgroundColor ?? undefined;
   }
@@ -2614,16 +2642,20 @@ export function SpreadsheetWorkspace({
     ): React.ReactNode {
       const backgroundColor = getAlternateRowBackground(props.row, snapshot.viewSetting);
       const color = getReadableTextColorForBackground(backgroundColor);
+      const rowStyle =
+        backgroundColor || color
+          ? ({
+              ...props.style,
+              ...(backgroundColor ? { "--sheet-row-bg": backgroundColor } : {}),
+              ...(color ? { "--sheet-row-color": color } : {})
+            } as CSSProperties)
+          : props.style;
 
       return (
         <Row
           key={key}
           {...props}
-          style={
-            backgroundColor
-              ? { ...props.style, backgroundColor, ...(color ? { color } : {}) }
-              : props.style
-          }
+          style={rowStyle}
         />
       );
     },

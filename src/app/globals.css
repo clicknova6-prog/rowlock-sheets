@@ -23,6 +23,15 @@
   --grid-alt-even-bg: #f8fafc;
   --grid-duplicate-bg: #fef08a;
   --grid-duplicate-text: #111827;
+  --grid-fill-red-bg: #fee2e2;
+  --grid-fill-orange-bg: #ffedd5;
+  --grid-fill-yellow-bg: #fef3c7;
+  --grid-fill-green-bg: #dcfce7;
+  --grid-fill-teal-bg: #ccfbf1;
+  --grid-fill-blue-bg: #dbeafe;
+  --grid-fill-violet-bg: #ede9fe;
+  --grid-fill-pink-bg: #fce7f3;
+  --grid-fill-text: #111827;
   --grid-locked-bg: rgba(148, 163, 184, 0.13);
   --grid-formula-bg: rgba(245, 158, 11, 0.13);
   --grid-selection-bg: rgba(20, 184, 166, 0.14);
@@ -51,6 +60,15 @@
   --grid-alt-even-bg: #172033;
   --grid-duplicate-bg: #713f12;
   --grid-duplicate-text: #fef3c7;
+  --grid-fill-red-bg: #4c1d1d;
+  --grid-fill-orange-bg: #4a2508;
+  --grid-fill-yellow-bg: #422006;
+  --grid-fill-green-bg: #052e16;
+  --grid-fill-teal-bg: #0f3f3a;
+  --grid-fill-blue-bg: #172554;
+  --grid-fill-violet-bg: #2e1065;
+  --grid-fill-pink-bg: #500724;
+  --grid-fill-text: #f8fafc;
   --grid-locked-bg: rgba(148, 163, 184, 0.16);
   --grid-formula-bg: rgba(245, 158, 11, 0.22);
   --grid-selection-bg: rgba(94, 234, 212, 0.16);
@@ -117,6 +135,16 @@ option {
   border-block-end: 1px solid var(--grid-line);
   outline-offset: -2px;
   user-select: none;
+}
+
+.rdg .rdg-row {
+  background-color: var(--sheet-row-bg, var(--grid-cell-bg));
+  color: var(--sheet-row-color, var(--text));
+}
+
+.rdg .rdg-row > .rdg-cell {
+  background-color: inherit;
+  color: inherit;
 }
 
 .rdg [role="columnheader"] {
