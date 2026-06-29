@@ -1,7 +1,7 @@
 import type { DecodedIdToken } from "firebase-admin/auth";
 import { FieldValue } from "firebase-admin/firestore";
 import { Role } from "@/generated/prisma/enums";
-import type { Actor } from "@/lib/sheet/types";
+import type { Actor, AdminMemberState } from "@/lib/sheet/types";
 import { firebaseAdminAuth, firebaseAdminDb } from "./admin";
 
 interface FirebaseUserProfile {
@@ -121,6 +121,158 @@ export async function createFirebaseMember({
     ]);
     throw error;
   }
+}
+
+export async function listFirebaseMembers(): Promise<AdminMemberState[]> {
+  const { prisma } = await import("@/lib/db");
+  const members = await prisma.user.findMany({
+    where: { role: Role.MEMBER },
+    orderBy: [{ createdAt: "desc" }, { email: "asc" }],
+    select: {
+      id: true,
+      email: true,
+      name: true,
+      role: true,
+      createdAt: true,
+      updatedAt: true,
+      _count: {
+        select: {
+          ownedRows: true,
+          updatedCells: true,
+          editedRows: true
+        }
+      }
+    }
+  });
+
+  return members.map((member) => ({
+    id: member.id,
+    email: member.email,
+    name: member.name,
+    role: member.role,
+    createdAt: member.createdAt.toISOString(),
+    updatedAt: member.updatedAt.toISOString(),
+    ownedRowCount: member._count.ownedRows,
+    updatedCellCount: member._count.updatedCells,
+    editedRowCount: member._count.editedRows
+  }));
+}
+
+export async function updateFirebaseMemberPassword(
+  memberId: string,
+  password: string
+): Promise<Actor> {
+  const { prisma } = await import("@/lib/db");
+  const member = await prisma.user.findUnique({
+    where: { id: memberId },
+    select: {
+      id: true,
+      email: true,
+      name: true,
+      role: true
+    }
+  });
+
+  if (!member || member.role !== Role.MEMBER) {
+    throw new Error("Member was not found.");
+  }
+
+  try {
+    await firebaseAdminAuth.updateUser(member.id, {
+      password,
+      disabled: false
+    });
+  } catch (error) {
+    if (!isFirebaseAuthError(error, "auth/user-not-found")) {
+      throw error;
+    }
+
+    await firebaseAdminAuth.createUser({
+      uid: member.id,
+      email: member.email,
+      password,
+      displayName: member.name,
+      disabled: false,
+      emailVerified: false
+    });
+  }
+
+  await firebaseAdminDb.collection("users").doc(member.id).set(
+    {
+      email: member.email,
+      name: member.name,
+      role: member.role,
+      updatedAt: FieldValue.serverTimestamp()
+    },
+    { merge: true }
+  );
+  await prisma.user.update({
+    where: { id: member.id },
+    data: { updatedAt: new Date() }
+  });
+
+  return {
+    id: member.id,
+    email: member.email,
+    name: member.name,
+    role: member.role
+  };
+}
+
+export async function deleteFirebaseMember(memberId: string): Promise<Actor> {
+  const { prisma } = await import("@/lib/db");
+  const member = await prisma.user.findUnique({
+    where: { id: memberId },
+    select: {
+      id: true,
+      email: true,
+      name: true,
+      role: true
+    }
+  });
+
+  if (!member || member.role !== Role.MEMBER) {
+    throw new Error("Member was not found.");
+  }
+
+  try {
+    await firebaseAdminAuth.deleteUser(member.id);
+  } catch (error) {
+    if (!isFirebaseAuthError(error, "auth/user-not-found")) {
+      throw error;
+    }
+  }
+
+  await firebaseAdminDb.collection("users").doc(member.id).delete();
+  await prisma.$transaction(
+    async (tx) => {
+      await tx.rowOwnership.deleteMany({ where: { ownerId: member.id } });
+      await tx.sheetRow.updateMany({
+        where: { lastEditedById: member.id },
+        data: { lastEditedById: null }
+      });
+      await tx.cell.updateMany({
+        where: { updatedById: member.id },
+        data: { updatedById: null }
+      });
+      await tx.cell.updateMany({
+        where: { lockedBy: member.id },
+        data: { lockedBy: null }
+      });
+      await tx.user.delete({ where: { id: member.id } });
+    },
+    {
+      maxWait: 10000,
+      timeout: 20000
+    }
+  );
+
+  return {
+    id: member.id,
+    email: member.email,
+    name: member.name,
+    role: member.role
+  };
 }
 
 export async function getOrCreateFirebaseActor(token: DecodedIdToken): Promise<Actor> {

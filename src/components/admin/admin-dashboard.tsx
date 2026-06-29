@@ -19,9 +19,15 @@ import {
   unlockRowAction
 } from "@/app/actions/admin-actions";
 import { CreateMemberForm } from "@/components/admin/create-member-form";
+import { MemberManagement } from "@/components/admin/member-management";
 import { RuleOperator } from "@/generated/prisma/enums";
 import { COLUMN_KEYS } from "@/lib/constants";
-import type { ConditionalRuleState, RuleConditionState, SheetSnapshot } from "@/lib/sheet/types";
+import type {
+  AdminMemberState,
+  ConditionalRuleState,
+  RuleConditionState,
+  SheetSnapshot
+} from "@/lib/sheet/types";
 
 const OPERATORS: Array<{ value: RuleOperator; label: string }> = [
   { value: RuleOperator.EQUALS, label: "Equals" },
@@ -308,7 +314,13 @@ function ConditionalRuleForm({
   );
 }
 
-export function AdminDashboard({ snapshot }: { snapshot: SheetSnapshot }) {
+export function AdminDashboard({
+  snapshot,
+  members
+}: {
+  snapshot: SheetSnapshot;
+  members: AdminMemberState[];
+}) {
   const ownedRows = snapshot.rows.filter((row) => row.ownerId).slice(0, 30);
   const memberEditableCount = snapshot.columnPermissions.filter(
     (permission) => permission.editableByMember
@@ -547,6 +559,14 @@ export function AdminDashboard({ snapshot }: { snapshot: SheetSnapshot }) {
             title="Add Member"
           >
             <CreateMemberForm />
+          </Section>
+
+          <Section
+            description="View all member logins, reset passwords, or remove a member account."
+            icon={<Users size={18} />}
+            title={`Members (${members.length})`}
+          >
+            <MemberManagement members={members} />
           </Section>
 
           <Section

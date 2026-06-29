@@ -10,6 +10,14 @@ export interface Actor {
   role: AppRole;
 }
 
+export interface AdminMemberState extends Actor {
+  createdAt: string;
+  updatedAt: string;
+  ownedRowCount: number;
+  updatedCellCount: number;
+  editedRowCount: number;
+}
+
 export interface ColumnPermissionState {
   columnKey: ColumnKey;
   editableByMember: boolean;

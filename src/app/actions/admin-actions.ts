@@ -5,7 +5,11 @@ import { AuditAction, RuleOperator } from "@/generated/prisma/enums";
 import { requireAdmin } from "@/lib/auth/session";
 import { COLUMN_KEYS, assertColumnKey, isValidRowIndex } from "@/lib/constants";
 import { prisma } from "@/lib/db";
-import { createFirebaseMember } from "@/lib/firebase/users";
+import {
+  createFirebaseMember,
+  deleteFirebaseMember,
+  updateFirebaseMemberPassword
+} from "@/lib/firebase/users";
 import { unlockRow } from "@/lib/sheet/service";
 import { normalizeHexColor } from "@/lib/sheet/formatting";
 import { parseRuleValues, toRuleOperator } from "@/lib/sheet/rules";
@@ -14,6 +18,12 @@ import { parseAllowedValues } from "@/lib/sheet/validation";
 export interface CreateMemberActionState {
   ok: boolean;
   message: string;
+}
+
+export interface MemberManagementActionState {
+  ok: boolean;
+  message: string;
+  memberId?: string;
 }
 
 const CREATE_MEMBER_INITIAL_STATE: CreateMemberActionState = {
@@ -27,6 +37,18 @@ function getString(formData: FormData, name: string): string {
 
 function isValidEmail(email: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+}
+
+function validatePassword(password: string): string | null {
+  if (password.length < 8) {
+    return "Password must be at least 8 characters.";
+  }
+
+  if (password.length > 128) {
+    return "Password is too long.";
+  }
+
+  return null;
 }
 
 async function auditAdminChange(
@@ -65,12 +87,9 @@ export async function createMemberAction(
     return { ok: false, message: "Enter a valid email address." };
   }
 
-  if (password.length < 8) {
-    return { ok: false, message: "Password must be at least 8 characters." };
-  }
-
-  if (password.length > 128) {
-    return { ok: false, message: "Password is too long." };
+  const passwordError = validatePassword(password);
+  if (passwordError) {
+    return { ok: false, message: passwordError };
   }
 
   if (name.length > 120) {
@@ -97,6 +116,81 @@ export async function createMemberAction(
     return {
       ok: false,
       message
+    };
+  }
+}
+
+export async function changeMemberPasswordAction(
+  previousState: MemberManagementActionState,
+  formData: FormData
+): Promise<MemberManagementActionState> {
+  void previousState;
+  await requireAdmin();
+
+  const memberId = getString(formData, "memberId");
+  const password = getString(formData, "password");
+  const passwordError = validatePassword(password);
+
+  if (!memberId) {
+    return { ok: false, message: "Choose a member first." };
+  }
+
+  if (passwordError) {
+    return { ok: false, message: passwordError, memberId };
+  }
+
+  try {
+    const member = await updateFirebaseMemberPassword(memberId, password);
+    refreshApp();
+
+    return {
+      ok: true,
+      memberId,
+      message: `Password changed for ${member.email}.`
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      memberId,
+      message: error instanceof Error ? error.message : "Unable to change this password."
+    };
+  }
+}
+
+export async function deleteMemberAction(
+  previousState: MemberManagementActionState,
+  formData: FormData
+): Promise<MemberManagementActionState> {
+  void previousState;
+  const actor = await requireAdmin();
+  const memberId = getString(formData, "memberId");
+
+  if (!memberId) {
+    return { ok: false, message: "Choose a member first." };
+  }
+
+  if (memberId === actor.id) {
+    return {
+      ok: false,
+      memberId,
+      message: "You cannot delete your own admin account here."
+    };
+  }
+
+  try {
+    const member = await deleteFirebaseMember(memberId);
+    refreshApp();
+
+    return {
+      ok: true,
+      memberId,
+      message: `${member.email} was deleted.`
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      memberId,
+      message: error instanceof Error ? error.message : "Unable to delete this member."
     };
   }
 }
