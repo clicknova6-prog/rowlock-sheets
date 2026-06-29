@@ -625,6 +625,19 @@ function getCellTextStyle(format: CellFormatState): CSSProperties | undefined {
   return Object.keys(style).length > 0 ? style : undefined;
 }
 
+function getReadableTextColorForBackground(backgroundColor: string | undefined): string | undefined {
+  if (!backgroundColor || !/^#[0-9a-f]{6}$/i.test(backgroundColor)) {
+    return undefined;
+  }
+
+  const red = Number.parseInt(backgroundColor.slice(1, 3), 16);
+  const green = Number.parseInt(backgroundColor.slice(3, 5), 16);
+  const blue = Number.parseInt(backgroundColor.slice(5, 7), 16);
+  const luminance = (0.2126 * red + 0.7152 * green + 0.0722 * blue) / 255;
+
+  return luminance > 0.55 ? "#111827" : "#f8fafc";
+}
+
 function getCellContainerStyle(
   baseStyle: CSSProperties | undefined,
   format: CellFormatState
@@ -635,7 +648,10 @@ function getCellContainerStyle(
 
   return {
     ...baseStyle,
-    backgroundColor: format.backgroundColor
+    backgroundColor: format.backgroundColor,
+    ...(!format.textColor
+      ? { color: getReadableTextColorForBackground(format.backgroundColor) }
+      : {})
   };
 }
 
@@ -2564,6 +2580,7 @@ export function SpreadsheetWorkspace({
       props: RenderRowProps<SheetGridRow, unknown>
     ): React.ReactNode {
       const backgroundColor = getAlternateRowBackground(props.row, snapshot.viewSetting);
+      const color = getReadableTextColorForBackground(backgroundColor);
 
       return (
         <Row
@@ -2571,7 +2588,7 @@ export function SpreadsheetWorkspace({
           {...props}
           style={
             backgroundColor
-              ? { ...props.style, backgroundColor }
+              ? { ...props.style, backgroundColor, ...(color ? { color } : {}) }
               : props.style
           }
         />

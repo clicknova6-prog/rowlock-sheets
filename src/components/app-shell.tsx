@@ -18,7 +18,7 @@ export function AppShell({
         <div className="mx-auto flex h-16 max-w-[1800px] items-center justify-between gap-4 px-4 sm:px-6">
           <div className="flex min-w-0 items-center gap-3">
             <Link
-              className="focus-ring inline-flex h-10 w-10 items-center justify-center rounded-md bg-[color:var(--accent)] text-white"
+              className="focus-ring inline-flex h-10 w-10 items-center justify-center rounded-md bg-[color:var(--accent)] text-[color:var(--accent-contrast)]"
               href="/"
               title="Spreadsheet"
             >

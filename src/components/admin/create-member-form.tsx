@@ -18,7 +18,7 @@ function SubmitButton() {
 
   return (
     <button
-      className="focus-ring inline-flex h-10 items-center justify-center gap-2 rounded-md bg-[color:var(--accent)] px-3 text-sm font-semibold text-white transition hover:bg-[color:var(--accent-strong)] disabled:cursor-not-allowed disabled:opacity-70"
+      className="focus-ring inline-flex h-10 items-center justify-center gap-2 rounded-md bg-[color:var(--accent)] px-3 text-sm font-semibold text-[color:var(--accent-contrast)] transition hover:bg-[color:var(--accent-strong)] disabled:cursor-not-allowed disabled:opacity-70"
       disabled={pending}
       type="submit"
     >

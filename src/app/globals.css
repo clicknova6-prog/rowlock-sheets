@@ -14,6 +14,7 @@
   --text-muted: #5d6b82;
   --accent: #0f766e;
   --accent-strong: #115e59;
+  --accent-contrast: #ffffff;
   --warning: #b45309;
   --danger: #be123c;
   --grid-bg: #ffffff;
@@ -29,8 +30,9 @@
   --line: #334155;
   --text: #f8fafc;
   --text-muted: #a7b2c2;
-  --accent: #2dd4bf;
-  --accent-strong: #5eead4;
+  --accent: #5eead4;
+  --accent-strong: #99f6e4;
+  --accent-contrast: #06201d;
   --warning: #f59e0b;
   --danger: #fb7185;
   --grid-bg: #111827;
@@ -54,6 +56,24 @@ input,
 select,
 textarea {
   font: inherit;
+}
+
+input,
+select,
+textarea {
+  color: var(--text);
+  caret-color: var(--accent);
+}
+
+select,
+option {
+  background-color: var(--panel);
+  color: var(--text);
+}
+
+::placeholder {
+  color: var(--text-muted);
+  opacity: 0.85;
 }
 
 .rdg {
@@ -131,6 +151,8 @@ textarea {
 
 .rdg-cell input,
 .rdg-cell textarea {
+  background-color: var(--panel);
+  color: var(--text);
   user-select: text;
 }
 

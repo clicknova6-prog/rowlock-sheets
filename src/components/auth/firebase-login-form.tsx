@@ -102,7 +102,7 @@ export function FirebaseLoginForm({ initialError }: { initialError?: string | nu
         />
       </label>
       <button
-        className="focus-ring inline-flex h-11 w-full items-center justify-center rounded-md bg-[color:var(--accent)] px-4 font-semibold text-white transition hover:bg-[color:var(--accent-strong)] disabled:cursor-not-allowed disabled:opacity-70"
+        className="focus-ring inline-flex h-11 w-full items-center justify-center rounded-md bg-[color:var(--accent)] px-4 font-semibold text-[color:var(--accent-contrast)] transition hover:bg-[color:var(--accent-strong)] disabled:cursor-not-allowed disabled:opacity-70"
         disabled={isPending}
         type="submit"
       >

@@ -90,7 +90,7 @@ function ActionButton({
           ? "focus-ring inline-flex h-10 items-center justify-center gap-2 rounded-md border border-rose-300 px-3 text-sm font-semibold text-rose-700 transition hover:bg-rose-50 dark:border-rose-900 dark:text-rose-200 dark:hover:bg-rose-950/40"
           : variant === "neutral"
             ? "focus-ring inline-flex h-10 items-center justify-center gap-2 rounded-md border border-[color:var(--line)] px-3 text-sm font-semibold transition hover:bg-[color:var(--panel-muted)]"
-            : "focus-ring inline-flex h-10 items-center justify-center gap-2 rounded-md bg-[color:var(--accent)] px-3 text-sm font-semibold text-white transition hover:bg-[color:var(--accent-strong)]"
+            : "focus-ring inline-flex h-10 items-center justify-center gap-2 rounded-md bg-[color:var(--accent)] px-3 text-sm font-semibold text-[color:var(--accent-contrast)] transition hover:bg-[color:var(--accent-strong)]"
       }
       type="submit"
     >

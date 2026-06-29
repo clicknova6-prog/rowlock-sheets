@@ -15,7 +15,7 @@ export default async function LoginPage({
     <main className="flex min-h-screen items-center justify-center bg-[color:var(--app-bg)] p-4 text-[color:var(--text)]">
       <section className="w-full max-w-md rounded-lg border border-[color:var(--line)] bg-[color:var(--panel)] p-6 shadow-soft-panel">
         <div className="mb-6 flex items-center gap-3">
-          <div className="inline-flex h-11 w-11 items-center justify-center rounded-md bg-[color:var(--accent)] text-white">
+          <div className="inline-flex h-11 w-11 items-center justify-center rounded-md bg-[color:var(--accent)] text-[color:var(--accent-contrast)]">
             <Grid3X3 size={22} />
           </div>
           <div>
