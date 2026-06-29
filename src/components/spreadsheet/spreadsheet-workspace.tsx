@@ -202,17 +202,32 @@ function getSelectionAutoScrollVelocity(
 ): Pick<SelectionAutoScrollState, "velocityX" | "velocityY"> {
   let velocityX = 0;
   let velocityY = 0;
+  const viewportWidth = window.innerWidth || document.documentElement.clientWidth;
+  const viewportHeight = window.innerHeight || document.documentElement.clientHeight;
+  const visibleLeft = Math.max(rect.left, 0);
+  const visibleRight = Math.min(rect.right, viewportWidth);
+  const visibleTop = Math.max(rect.top, 0);
+  const visibleBottom = Math.min(rect.bottom, viewportHeight);
+  const edgeRect =
+    visibleRight > visibleLeft && visibleBottom > visibleTop
+      ? {
+          left: visibleLeft,
+          right: visibleRight,
+          top: visibleTop,
+          bottom: visibleBottom
+        }
+      : rect;
 
-  if (clientX < rect.left + SELECTION_AUTO_SCROLL_EDGE_PX) {
-    velocityX = -getSelectionEdgeVelocity(rect.left + SELECTION_AUTO_SCROLL_EDGE_PX - clientX);
-  } else if (clientX > rect.right - SELECTION_AUTO_SCROLL_EDGE_PX) {
-    velocityX = getSelectionEdgeVelocity(clientX - (rect.right - SELECTION_AUTO_SCROLL_EDGE_PX));
+  if (clientX < edgeRect.left + SELECTION_AUTO_SCROLL_EDGE_PX) {
+    velocityX = -getSelectionEdgeVelocity(edgeRect.left + SELECTION_AUTO_SCROLL_EDGE_PX - clientX);
+  } else if (clientX > edgeRect.right - SELECTION_AUTO_SCROLL_EDGE_PX) {
+    velocityX = getSelectionEdgeVelocity(clientX - (edgeRect.right - SELECTION_AUTO_SCROLL_EDGE_PX));
   }
 
-  if (clientY < rect.top + SELECTION_AUTO_SCROLL_EDGE_PX) {
-    velocityY = -getSelectionEdgeVelocity(rect.top + SELECTION_AUTO_SCROLL_EDGE_PX - clientY);
-  } else if (clientY > rect.bottom - SELECTION_AUTO_SCROLL_EDGE_PX) {
-    velocityY = getSelectionEdgeVelocity(clientY - (rect.bottom - SELECTION_AUTO_SCROLL_EDGE_PX));
+  if (clientY < edgeRect.top + SELECTION_AUTO_SCROLL_EDGE_PX) {
+    velocityY = -getSelectionEdgeVelocity(edgeRect.top + SELECTION_AUTO_SCROLL_EDGE_PX - clientY);
+  } else if (clientY > edgeRect.bottom - SELECTION_AUTO_SCROLL_EDGE_PX) {
+    velocityY = getSelectionEdgeVelocity(clientY - (edgeRect.bottom - SELECTION_AUTO_SCROLL_EDGE_PX));
   }
 
   return { velocityX, velocityY };
