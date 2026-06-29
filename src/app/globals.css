@@ -18,6 +18,16 @@
   --warning: #b45309;
   --danger: #be123c;
   --grid-bg: #ffffff;
+  --grid-cell-bg: #ffffff;
+  --grid-alt-odd-bg: #ffffff;
+  --grid-alt-even-bg: #f8fafc;
+  --grid-duplicate-bg: #fef08a;
+  --grid-duplicate-text: #111827;
+  --grid-locked-bg: rgba(148, 163, 184, 0.13);
+  --grid-formula-bg: rgba(245, 158, 11, 0.13);
+  --grid-selection-bg: rgba(20, 184, 166, 0.14);
+  --grid-selection-anchor-bg: rgba(20, 184, 166, 0.18);
+  --grid-selection-outline: rgba(20, 184, 166, 0.48);
   --grid-line: #c3cedd;
   --grid-line-strong: #9aa9bc;
 }
@@ -36,6 +46,16 @@
   --warning: #f59e0b;
   --danger: #fb7185;
   --grid-bg: #111827;
+  --grid-cell-bg: #111827;
+  --grid-alt-odd-bg: #111827;
+  --grid-alt-even-bg: #172033;
+  --grid-duplicate-bg: #713f12;
+  --grid-duplicate-text: #fef3c7;
+  --grid-locked-bg: rgba(148, 163, 184, 0.16);
+  --grid-formula-bg: rgba(245, 158, 11, 0.22);
+  --grid-selection-bg: rgba(94, 234, 212, 0.16);
+  --grid-selection-anchor-bg: rgba(94, 234, 212, 0.22);
+  --grid-selection-outline: rgba(94, 234, 212, 0.6);
   --grid-line: #3f4b5f;
   --grid-line-strong: #66758b;
 }
@@ -84,6 +104,8 @@ option {
   --rdg-border-color: var(--line);
   --rdg-border-width: 1px;
   --rdg-selection-color: var(--accent);
+  --rdg-row-selected-background-color: var(--grid-selection-bg);
+  --rdg-row-selected-hover-background-color: var(--grid-selection-anchor-bg);
   border-radius: 8px;
   border-color: var(--grid-line-strong);
   block-size: min(680px, max(420px, calc(100vh - 260px)));
@@ -138,13 +160,13 @@ option {
   z-index: 1;
   pointer-events: none;
   content: "";
-  background: rgba(20, 184, 166, 0.14);
-  outline: 1px solid rgba(20, 184, 166, 0.48);
+  background: var(--grid-selection-bg);
+  outline: 1px solid var(--grid-selection-outline);
   outline-offset: -1px;
 }
 
 .sheet-cell-range-anchor::after {
-  background: rgba(20, 184, 166, 0.18);
+  background: var(--grid-selection-anchor-bg);
   outline: 2px solid var(--accent);
   outline-offset: -2px;
 }
@@ -157,7 +179,7 @@ option {
 }
 
 .sheet-cell-locked {
-  background: rgba(148, 163, 184, 0.13);
+  background: var(--grid-locked-bg);
   color: var(--text-muted);
 }
 
@@ -166,7 +188,7 @@ option {
 }
 
 .sheet-cell-formula {
-  background: rgba(245, 158, 11, 0.13);
+  background: var(--grid-formula-bg);
 }
 
 .sheet-cell-live-locked {

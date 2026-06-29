@@ -626,6 +626,10 @@ function getCellTextStyle(format: CellFormatState): CSSProperties | undefined {
 }
 
 function getReadableTextColorForBackground(backgroundColor: string | undefined): string | undefined {
+  if (backgroundColor === "var(--grid-duplicate-bg)") {
+    return "var(--grid-duplicate-text)";
+  }
+
   if (!backgroundColor || !/^#[0-9a-f]{6}$/i.test(backgroundColor)) {
     return undefined;
   }
@@ -638,19 +642,46 @@ function getReadableTextColorForBackground(backgroundColor: string | undefined):
   return luminance > 0.55 ? "#111827" : "#f8fafc";
 }
 
+function getThemeAwareCellBackgroundColor(backgroundColor: string | null | undefined): string | undefined {
+  switch (backgroundColor?.toLowerCase()) {
+    case "#ffffff":
+      return "var(--grid-cell-bg)";
+    case "#f8fafc":
+      return "var(--grid-alt-even-bg)";
+    default:
+      return backgroundColor ?? undefined;
+  }
+}
+
+function getThemeAwareRowBackgroundColor(
+  backgroundColor: string | null | undefined,
+  rowNumber: number
+): string | undefined {
+  switch (backgroundColor?.toLowerCase()) {
+    case "#ffffff":
+      return rowNumber % 2 === 0 ? "var(--grid-alt-even-bg)" : "var(--grid-alt-odd-bg)";
+    case "#f8fafc":
+      return "var(--grid-alt-even-bg)";
+    default:
+      return backgroundColor ?? undefined;
+  }
+}
+
 function getCellContainerStyle(
   baseStyle: CSSProperties | undefined,
   format: CellFormatState
 ): CSSProperties | undefined {
-  if (!format.backgroundColor) {
+  const backgroundColor = getThemeAwareCellBackgroundColor(format.backgroundColor);
+
+  if (!backgroundColor) {
     return baseStyle;
   }
 
   return {
     ...baseStyle,
-    backgroundColor: format.backgroundColor,
+    backgroundColor,
     ...(!format.textColor
-      ? { color: getReadableTextColorForBackground(format.backgroundColor) }
+      ? { color: getReadableTextColorForBackground(backgroundColor) }
       : {})
   };
 }
@@ -660,16 +691,18 @@ function getAlternateRowBackground(
   viewSetting: SheetViewSettingState
 ): string | undefined {
   if (row.__duplicateHighlight) {
-    return "#fef08a";
+    return "var(--grid-duplicate-bg)";
   }
 
   if (!viewSetting.alternateRowColors) {
     return undefined;
   }
 
-  return row.rowNumber % 2 === 0
+  const backgroundColor = row.rowNumber % 2 === 0
     ? viewSetting.alternateEvenColor
     : viewSetting.alternateOddColor;
+
+  return getThemeAwareRowBackgroundColor(backgroundColor, row.rowNumber);
 }
 
 function FormatIconButton({
