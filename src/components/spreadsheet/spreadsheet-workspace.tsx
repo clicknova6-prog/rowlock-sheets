@@ -332,13 +332,19 @@ function estimateWrappedLineCount(value: string): number {
   }, 0);
 }
 
-function getResponsiveRowHeight(row: SheetGridRow, columns: ColumnKey[]): number {
+function getResponsiveRowHeight(
+  row: SheetGridRow,
+  columns: ColumnKey[],
+  fontSize: number
+): number {
   const maxLines = columns.reduce((lineCount, columnKey) => {
     const cellValue = getRenderedCellValue(row, columnKey);
     return Math.max(lineCount, estimateWrappedLineCount(cellValue));
   }, 1);
+  const lineHeight = Math.max(14, fontSize * 1.35);
+  const minimumHeight = Math.max(34, fontSize * 2.4);
 
-  return Math.min(150, Math.max(34, maxLines * 18 + 12));
+  return Math.min(260, Math.ceil(Math.max(minimumHeight, maxLines * lineHeight + 12)));
 }
 
 function parseClipboardGrid(text: string): string[][] {
@@ -962,8 +968,9 @@ export function SpreadsheetWorkspace({
         ? `${socketSyncEnabled ? "Live sync" : "Save"} queued for ${pendingSaveCount} cell${pendingSaveCount === 1 ? "" : "s"}.`
         : "Ready");
   const rowHeight = useCallback(
-    (row: SheetGridRow) => getResponsiveRowHeight(row, snapshot.columns),
-    [snapshot.columns]
+    (row: SheetGridRow) =>
+      getResponsiveRowHeight(row, snapshot.columns, snapshot.viewSetting.fontSize),
+    [snapshot.columns, snapshot.viewSetting.fontSize]
   );
   const getGridScrollElement = useCallback((): HTMLElement | null => {
     return dataGridRef.current?.element ?? gridShellRef.current?.querySelector<HTMLElement>(".rdg") ?? null;
@@ -3087,8 +3094,7 @@ export function SpreadsheetWorkspace({
           key: columnKey,
           name: columnKey,
           width: 230,
-          minWidth: 160,
-          maxWidth: 420,
+          minWidth: 1,
           resizable: true,
           editable: (row: SheetGridRow) =>
             row.__editable[columnKey] &&
@@ -3466,6 +3472,12 @@ export function SpreadsheetWorkspace({
           renderers={renderers}
           rowHeight={rowHeight}
           rows={rows}
+          style={
+            {
+              "--rdg-font-size": `${snapshot.viewSetting.fontSize}px`,
+              "--sheet-font-size": `${snapshot.viewSetting.fontSize}px`
+            } as CSSProperties
+          }
           onRowsChange={handleRowsChange}
           onFill={isAdmin ? handleFill : undefined}
           onCellMouseDown={(args, event) => {

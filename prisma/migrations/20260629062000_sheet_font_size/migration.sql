@@ -1,0 +1,2 @@
+ALTER TABLE `SheetViewSetting`
+  ADD COLUMN `fontSize` INTEGER NOT NULL DEFAULT 14;

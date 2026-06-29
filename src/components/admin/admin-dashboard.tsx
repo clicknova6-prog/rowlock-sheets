@@ -406,7 +406,7 @@ export function AdminDashboard({
                 />
                 Alternating row colors
               </label>
-              <div className="grid gap-3 sm:grid-cols-2">
+              <div className="grid gap-3 sm:grid-cols-3">
                 <label>
                   <FieldLabel>Odd rows</FieldLabel>
                   <ColorInput
@@ -420,6 +420,17 @@ export function AdminDashboard({
                     defaultValue={snapshot.viewSetting.alternateEvenColor}
                     name="alternateEvenColor"
                   />
+                </label>
+                <label>
+                  <FieldLabel>Text size</FieldLabel>
+                  <TextInput
+                    defaultValue={snapshot.viewSetting.fontSize}
+                    max={36}
+                    min={8}
+                    name="fontSize"
+                    type="number"
+                  />
+                  <HelpText>Applies to every cell in the sheet.</HelpText>
                 </label>
               </div>
               <ActionButton>

@@ -157,6 +157,7 @@ option {
   align-items: flex-start;
   min-width: 0;
   padding-block: 4px;
+  font-size: var(--sheet-font-size, inherit);
 }
 
 .sheet-cell > div,
@@ -203,6 +204,7 @@ option {
 .rdg-cell textarea {
   background-color: var(--panel);
   color: var(--text);
+  font-size: var(--sheet-font-size, inherit);
   user-select: text;
 }
 
@@ -244,6 +246,7 @@ option {
 
 .sheet-row-index {
   color: var(--text-muted);
+  font-size: calc(var(--sheet-font-size, 14px) * 0.86);
   font-variant-numeric: tabular-nums;
 }
 

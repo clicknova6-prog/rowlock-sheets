@@ -22,11 +22,14 @@ export const FORMAT_COLOR_PALETTE = [
 export const DEFAULT_SHEET_VIEW_SETTING: SheetViewSettingState = {
   alternateRowColors: false,
   alternateOddColor: "#ffffff",
-  alternateEvenColor: "#f8fafc"
+  alternateEvenColor: "#f8fafc",
+  fontSize: 14
 };
 
 const HEX_COLOR_PATTERN = /^#[0-9a-f]{6}$/i;
 const HORIZONTAL_ALIGNMENTS = ["left", "center", "right"] as const;
+const MIN_SHEET_FONT_SIZE = 8;
+const MAX_SHEET_FONT_SIZE = 36;
 
 export function createDefaultCellFormat(): CellFormatState {
   return {
@@ -51,6 +54,16 @@ export function normalizeHexColor(value: unknown): string | null {
   }
 
   return color.toLowerCase();
+}
+
+export function normalizeSheetFontSize(value: unknown): number {
+  const size = Number.parseInt(String(value ?? ""), 10);
+
+  if (!Number.isFinite(size)) {
+    return DEFAULT_SHEET_VIEW_SETTING.fontSize;
+  }
+
+  return Math.min(MAX_SHEET_FONT_SIZE, Math.max(MIN_SHEET_FONT_SIZE, size));
 }
 
 export function normalizeHorizontalAlign(value: unknown): HorizontalAlign | null {

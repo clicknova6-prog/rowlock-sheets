@@ -69,6 +69,7 @@ export interface SheetViewSettingState {
   alternateRowColors: boolean;
   alternateOddColor: string;
   alternateEvenColor: string;
+  fontSize: number;
 }
 
 export interface ValidationRuleState {
