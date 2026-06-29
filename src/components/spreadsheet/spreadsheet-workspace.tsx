@@ -36,6 +36,7 @@ import {
   Row,
   type CellRendererProps,
   type Column,
+  type DataGridHandle,
   type FillEvent,
   type RenderRowProps,
   type RenderEditCellProps,
@@ -126,6 +127,16 @@ const SOCKET_BULK_UPDATE_LIMIT = 50;
 const REST_BULK_UPDATE_LIMIT = 200;
 const LIVE_SYNC_ACK_TIMEOUT_MS = 300000;
 const REALTIME_SNAPSHOT_REFRESH_MS = 400;
+const SELECTION_AUTO_SCROLL_EDGE_PX = 56;
+const SELECTION_AUTO_SCROLL_MAX_PX = 28;
+
+interface SelectionAutoScrollState {
+  frameId: number | null;
+  velocityX: number;
+  velocityY: number;
+  pointerX: number;
+  pointerY: number;
+}
 
 function isColumnKey(value: string, columns: ColumnKey[]): value is ColumnKey {
   return columns.includes(value as ColumnKey);
@@ -167,6 +178,82 @@ function getRenderedCellValue(row: SheetGridRow, columnKey: ColumnKey): string {
   return row.__formula[columnKey]
     ? row.__computed[columnKey]
     : String(row[columnKey] ?? "");
+}
+
+function getSelectionEdgeVelocity(distance: number): number {
+  if (distance <= 0) {
+    return 0;
+  }
+
+  const intensity = Math.min(1, distance / SELECTION_AUTO_SCROLL_EDGE_PX);
+  return Math.max(1, Math.round(intensity * SELECTION_AUTO_SCROLL_MAX_PX));
+}
+
+function getSelectionAutoScrollVelocity(
+  clientX: number,
+  clientY: number,
+  rect: DOMRect
+): Pick<SelectionAutoScrollState, "velocityX" | "velocityY"> {
+  let velocityX = 0;
+  let velocityY = 0;
+
+  if (clientX < rect.left + SELECTION_AUTO_SCROLL_EDGE_PX) {
+    velocityX = -getSelectionEdgeVelocity(rect.left + SELECTION_AUTO_SCROLL_EDGE_PX - clientX);
+  } else if (clientX > rect.right - SELECTION_AUTO_SCROLL_EDGE_PX) {
+    velocityX = getSelectionEdgeVelocity(clientX - (rect.right - SELECTION_AUTO_SCROLL_EDGE_PX));
+  }
+
+  if (clientY < rect.top + SELECTION_AUTO_SCROLL_EDGE_PX) {
+    velocityY = -getSelectionEdgeVelocity(rect.top + SELECTION_AUTO_SCROLL_EDGE_PX - clientY);
+  } else if (clientY > rect.bottom - SELECTION_AUTO_SCROLL_EDGE_PX) {
+    velocityY = getSelectionEdgeVelocity(clientY - (rect.bottom - SELECTION_AUTO_SCROLL_EDGE_PX));
+  }
+
+  return { velocityX, velocityY };
+}
+
+function isTextEditingTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) {
+    return false;
+  }
+
+  return (
+    target instanceof HTMLInputElement ||
+    target instanceof HTMLTextAreaElement ||
+    target instanceof HTMLSelectElement ||
+    target.isContentEditable
+  );
+}
+
+function clampPointerToRect(clientX: number, clientY: number, rect: DOMRect): { x: number; y: number } {
+  return {
+    x: Math.min(rect.right - 1, Math.max(rect.left + 1, clientX)),
+    y: Math.min(rect.bottom - 1, Math.max(rect.top + 1, clientY))
+  };
+}
+
+function getSheetCellFromPoint(
+  clientX: number,
+  clientY: number,
+  columns: ColumnKey[],
+  rect?: DOMRect
+): SelectedCell | null {
+  const pointer = rect ? clampPointerToRect(clientX, clientY, rect) : { x: clientX, y: clientY };
+  const element = document.elementFromPoint(pointer.x, pointer.y);
+  const cellElement = element?.closest<HTMLElement>("[data-sheet-row-index][data-sheet-column-key]");
+
+  if (!cellElement) {
+    return null;
+  }
+
+  const rowIndex = Number(cellElement.dataset.sheetRowIndex);
+  const columnKey = cellElement.dataset.sheetColumnKey;
+
+  if (!Number.isInteger(rowIndex) || !columnKey || !isColumnKey(columnKey, columns)) {
+    return null;
+  }
+
+  return { rowIndex, columnKey };
 }
 
 function countEditableColumns(snapshot: SheetSnapshot): number {
@@ -648,6 +735,17 @@ export function SpreadsheetWorkspace({
   const autosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const inFlightTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const snapshotRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const gridShellRef = useRef<HTMLDivElement | null>(null);
+  const dataGridRef = useRef<DataGridHandle | null>(null);
+  const selectionKeyboardActiveRef = useRef(false);
+  const selectionAutoScrollRef = useRef<SelectionAutoScrollState>({
+    frameId: null,
+    velocityX: 0,
+    velocityY: 0,
+    pointerX: 0,
+    pointerY: 0
+  });
+  const runSelectionAutoScrollRef = useRef<() => void>(() => undefined);
   const saveInFlightRef = useRef(false);
   const flushQueuedCellUpdatesRef = useRef<() => Promise<boolean>>(async () => true);
   const activeSocketCellRef = useRef<SelectedCell | null>(null);
@@ -723,6 +821,20 @@ export function SpreadsheetWorkspace({
     (row: SheetGridRow) => getResponsiveRowHeight(row, snapshot.columns),
     [snapshot.columns]
   );
+  const getGridScrollElement = useCallback((): HTMLElement | null => {
+    return dataGridRef.current?.element ?? gridShellRef.current?.querySelector<HTMLElement>(".rdg") ?? null;
+  }, []);
+  const stopSelectionAutoScroll = useCallback((): void => {
+    const autoScrollState = selectionAutoScrollRef.current;
+
+    if (autoScrollState.frameId !== null) {
+      window.cancelAnimationFrame(autoScrollState.frameId);
+    }
+
+    autoScrollState.frameId = null;
+    autoScrollState.velocityX = 0;
+    autoScrollState.velocityY = 0;
+  }, []);
 
   useEffect(() => {
     latestSnapshotRef.current = snapshot;
@@ -761,6 +873,7 @@ export function SpreadsheetWorkspace({
 
     function stopRangeSelection(): void {
       setIsRangeSelecting(false);
+      stopSelectionAutoScroll();
     }
 
     window.addEventListener("mouseup", stopRangeSelection);
@@ -769,8 +882,28 @@ export function SpreadsheetWorkspace({
     return () => {
       window.removeEventListener("mouseup", stopRangeSelection);
       window.removeEventListener("blur", stopRangeSelection);
+      stopSelectionAutoScroll();
     };
-  }, [isRangeSelecting]);
+  }, [isRangeSelecting, stopSelectionAutoScroll]);
+
+  useEffect(() => {
+    function markSelectionInactive(event: PointerEvent | FocusEvent): void {
+      const shell = gridShellRef.current;
+      const target = event.target instanceof Node ? event.target : null;
+
+      if (!shell || !target || !shell.contains(target)) {
+        selectionKeyboardActiveRef.current = false;
+      }
+    }
+
+    document.addEventListener("pointerdown", markSelectionInactive);
+    document.addEventListener("focusin", markSelectionInactive);
+
+    return () => {
+      document.removeEventListener("pointerdown", markSelectionInactive);
+      document.removeEventListener("focusin", markSelectionInactive);
+    };
+  }, []);
 
   const clearAutosaveTimer = useCallback((): void => {
     if (autosaveTimerRef.current) {
@@ -1610,6 +1743,40 @@ export function SpreadsheetWorkspace({
     );
   }, [demoMode, locks, queueCellUpdates, rows, selectedCell, selectedRange, snapshot]);
 
+  useEffect(() => {
+    function handleDocumentKeyDown(event: KeyboardEvent): void {
+      if (
+        event.defaultPrevented ||
+        (event.key !== "Backspace" && event.key !== "Delete") ||
+        (!selectedCell && !selectedRange) ||
+        isTextEditingTarget(event.target)
+      ) {
+        return;
+      }
+
+      const shell = gridShellRef.current;
+      const target = event.target instanceof Node ? event.target : null;
+      const activeElement = document.activeElement;
+      const eventStartedInGrid = Boolean(shell && target && shell.contains(target));
+      const focusIsInGrid = Boolean(shell && activeElement && shell.contains(activeElement));
+
+      if (!selectionKeyboardActiveRef.current && !eventStartedInGrid && !focusIsInGrid) {
+        return;
+      }
+
+      event.preventDefault();
+      startTransition(() => {
+        void clearSelectedCells();
+      });
+    }
+
+    document.addEventListener("keydown", handleDocumentKeyDown);
+
+    return () => {
+      document.removeEventListener("keydown", handleDocumentKeyDown);
+    };
+  }, [clearSelectedCells, selectedCell, selectedRange, startTransition]);
+
   const applyCellFormat = useCallback(async (
     format: CellFormatPatch = {},
     clear = false
@@ -1898,6 +2065,114 @@ export function SpreadsheetWorkspace({
     });
   }, [isAdmin, isRangeSelecting]);
 
+  const updateRangeFocusFromPointer = useCallback((
+    clientX: number,
+    clientY: number,
+    rect?: DOMRect
+  ): void => {
+    const cell = getSheetCellFromPoint(
+      clientX,
+      clientY,
+      latestSnapshotRef.current.columns,
+      rect
+    );
+
+    if (cell) {
+      updateRangeFocus(cell);
+    }
+  }, [updateRangeFocus]);
+
+  useEffect(() => {
+    runSelectionAutoScrollRef.current = () => {
+      const autoScrollState = selectionAutoScrollRef.current;
+
+      if (autoScrollState.velocityX === 0 && autoScrollState.velocityY === 0) {
+        autoScrollState.frameId = null;
+        return;
+      }
+
+      const scrollElement = getGridScrollElement();
+
+      if (scrollElement) {
+        const previousScrollLeft = scrollElement.scrollLeft;
+        const previousScrollTop = scrollElement.scrollTop;
+
+        scrollElement.scrollBy({
+          left: autoScrollState.velocityX,
+          top: autoScrollState.velocityY
+        });
+
+        if (
+          scrollElement.scrollLeft !== previousScrollLeft ||
+          scrollElement.scrollTop !== previousScrollTop
+        ) {
+          updateRangeFocusFromPointer(
+            autoScrollState.pointerX,
+            autoScrollState.pointerY,
+            scrollElement.getBoundingClientRect()
+          );
+        }
+      }
+
+      autoScrollState.frameId = window.requestAnimationFrame(runSelectionAutoScrollRef.current);
+    };
+  }, [getGridScrollElement, updateRangeFocusFromPointer]);
+
+  const updateSelectionAutoScrollAtPoint = useCallback((clientX: number, clientY: number): void => {
+    if (!isRangeSelecting) {
+      stopSelectionAutoScroll();
+      return;
+    }
+
+    const scrollElement = getGridScrollElement();
+
+    if (!scrollElement) {
+      stopSelectionAutoScroll();
+      return;
+    }
+
+    const autoScrollState = selectionAutoScrollRef.current;
+    const { velocityX, velocityY } = getSelectionAutoScrollVelocity(
+      clientX,
+      clientY,
+      scrollElement.getBoundingClientRect()
+    );
+
+    autoScrollState.pointerX = clientX;
+    autoScrollState.pointerY = clientY;
+    autoScrollState.velocityX = velocityX;
+    autoScrollState.velocityY = velocityY;
+
+    if (velocityX === 0 && velocityY === 0) {
+      stopSelectionAutoScroll();
+      return;
+    }
+
+    if (autoScrollState.frameId === null) {
+      autoScrollState.frameId = window.requestAnimationFrame(runSelectionAutoScrollRef.current);
+    }
+  }, [getGridScrollElement, isRangeSelecting, stopSelectionAutoScroll]);
+
+  const updateSelectionAutoScroll = useCallback((event: React.MouseEvent<HTMLElement>): void => {
+    updateSelectionAutoScrollAtPoint(event.clientX, event.clientY);
+  }, [updateSelectionAutoScrollAtPoint]);
+
+  useEffect(() => {
+    if (!isRangeSelecting) {
+      return;
+    }
+
+    function updateWindowSelectionAutoScroll(event: MouseEvent): void {
+      updateSelectionAutoScrollAtPoint(event.clientX, event.clientY);
+    }
+
+    window.addEventListener("mousemove", updateWindowSelectionAutoScroll);
+
+    return () => {
+      window.removeEventListener("mousemove", updateWindowSelectionAutoScroll);
+    };
+  }, [isRangeSelecting, updateSelectionAutoScrollAtPoint]);
+
   const handleFill = useCallback((event: FillEvent<SheetGridRow>): SheetGridRow => {
     if (!isColumnKey(event.columnKey, snapshot.columns)) {
       return event.targetRow;
@@ -1972,6 +2247,8 @@ export function SpreadsheetWorkspace({
           <Cell
             key={key}
             {...props}
+            data-sheet-row-index={props.row.rowNumber}
+            data-sheet-column-key={lastColumnKey}
             onMouseEnter={(event) => {
               props.onMouseEnter?.(event);
               updateRangeFocus(cell);
@@ -1998,6 +2275,8 @@ export function SpreadsheetWorkspace({
         <Cell
           key={key}
           {...props}
+          data-sheet-row-index={props.row.rowNumber}
+          data-sheet-column-key={columnKey}
           style={getCellContainerStyle(props.style, format)}
           onMouseEnter={(event) => {
             props.onMouseEnter?.(event);
@@ -2568,7 +2847,14 @@ export function SpreadsheetWorkspace({
         </div>
       )}
 
-      <div className="overflow-hidden rounded-lg border border-[color:var(--line)] bg-[color:var(--panel)] shadow-sm">
+      <div
+        ref={gridShellRef}
+        className="overflow-hidden rounded-lg border border-[color:var(--line)] bg-[color:var(--panel)] shadow-sm"
+        onMouseDownCapture={() => {
+          selectionKeyboardActiveRef.current = true;
+        }}
+        onMouseMove={updateSelectionAutoScroll}
+      >
         <textarea
           aria-label="Selected cell clipboard bridge"
           className="sr-only"
@@ -2585,6 +2871,7 @@ export function SpreadsheetWorkspace({
           onPaste={handleSelectedCellPaste}
         />
         <DataGrid
+          ref={dataGridRef}
           className={clsx("fill-grid", isRangeSelecting && "sheet-range-selecting")}
           columns={columns}
           renderers={renderers}
@@ -2593,6 +2880,8 @@ export function SpreadsheetWorkspace({
           onRowsChange={handleRowsChange}
           onFill={isAdmin ? handleFill : undefined}
           onCellMouseDown={(args, event) => {
+            selectionKeyboardActiveRef.current = true;
+
             if (!isAdmin) {
               return;
             }
@@ -2729,6 +3018,7 @@ export function SpreadsheetWorkspace({
                 columnKey: args.column.key
               };
 
+              selectionKeyboardActiveRef.current = true;
               setSelectedCell(cell);
               focusLiveCell(cell);
 
