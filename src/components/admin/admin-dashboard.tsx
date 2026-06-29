@@ -143,11 +143,13 @@ function HelpText({ children }: { children: React.ReactNode }) {
 function PermissionTile({
   columnKey,
   editableByMember,
+  claimRowOnEdit,
   memberWriteOnce,
   duplicateHighlight
 }: {
   columnKey: string;
   editableByMember: boolean;
+  claimRowOnEdit: boolean;
   memberWriteOnce: boolean;
   duplicateHighlight: boolean;
 }) {
@@ -178,6 +180,15 @@ function PermissionTile({
         {editableByMember ? "Admin + member" : "Admin only"}
       </span>
       <span className="grid gap-2 text-xs font-medium text-[color:var(--text-muted)]">
+        <span className="flex items-center gap-2">
+          <input
+            className="h-4 w-4 accent-[color:var(--accent)]"
+            defaultChecked={claimRowOnEdit}
+            name={`claimRow-${columnKey}`}
+            type="checkbox"
+          />
+          Claim row
+        </span>
         <span className="flex items-center gap-2">
           <input
             className="h-4 w-4 accent-[color:var(--accent)]"
@@ -370,6 +381,7 @@ export function AdminDashboard({
               <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-[repeat(9,minmax(0,1fr))] xl:grid-cols-[repeat(13,minmax(0,1fr))]">
                 {snapshot.columnPermissions.map((permission) => (
                   <PermissionTile
+                    claimRowOnEdit={permission.claimRowOnEdit}
                     columnKey={permission.columnKey}
                     duplicateHighlight={permission.duplicateHighlight}
                     editableByMember={permission.editableByMember}
@@ -384,7 +396,7 @@ export function AdminDashboard({
                   Save permissions
                 </ActionButton>
                 <span className="text-xs text-[color:var(--text-muted)]">
-                  Save also applies write-once locks and duplicate yellow rows.
+                  Claim row applies only after a member saves a valid non-empty value.
                 </span>
               </div>
             </form>

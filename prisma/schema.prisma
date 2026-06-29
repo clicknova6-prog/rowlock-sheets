@@ -148,6 +148,7 @@ model ColumnPermission {
   sheetId            String
   columnKey          String   @db.VarChar(1)
   editableByMember   Boolean  @default(false)
+  claimRowOnEdit     Boolean  @default(false)
   memberWriteOnce    Boolean  @default(false)
   duplicateHighlight Boolean  @default(false)
   createdAt          DateTime @default(now())

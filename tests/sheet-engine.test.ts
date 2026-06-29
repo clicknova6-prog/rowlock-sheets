@@ -10,18 +10,21 @@ const permissions: ColumnPermissionState[] = [
   {
     columnKey: "A",
     editableByMember: true,
+    claimRowOnEdit: true,
     memberWriteOnce: false,
     duplicateHighlight: false
   },
   {
     columnKey: "B",
     editableByMember: false,
+    claimRowOnEdit: false,
     memberWriteOnce: false,
     duplicateHighlight: false
   },
   {
     columnKey: "C",
     editableByMember: true,
+    claimRowOnEdit: false,
     memberWriteOnce: true,
     duplicateHighlight: false
   }
@@ -62,6 +65,18 @@ describe("cell permission and row ownership rules", () => {
 
     expect(decision.allowed).toBe(true);
     expect(decision.willClaimRow).toBe(true);
+  });
+
+  it("allows member edits without claiming when the column is not a claim column", () => {
+    const decision = getCellEditDecision({
+      role: Role.MEMBER,
+      userId: "member",
+      columnKey: "C",
+      columnPermissions: permissions
+    });
+
+    expect(decision.allowed).toBe(true);
+    expect(decision.willClaimRow).toBe(false);
   });
 
   it("blocks members from rows owned by another member", () => {

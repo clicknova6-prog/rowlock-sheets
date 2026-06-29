@@ -17,6 +17,7 @@ import {
   History,
   Italic,
   Lock,
+  LockKeyhole,
   PaintBucket,
   Palette,
   Rows3,
@@ -899,12 +900,10 @@ export function SpreadsheetWorkspace({
   const saveInFlightRef = useRef(false);
   const flushQueuedCellUpdatesRef = useRef<() => Promise<boolean>>(async () => true);
   const activeSocketCellRef = useRef<SelectedCell | null>(null);
-  const rowClaimRequestsRef = useRef<Set<number>>(new Set());
   const clientInstanceIdRef = useRef(createClientInstanceId());
   const socketConnectedRef = useRef(false);
   const socketUpdateCellRef = useRef<(update: CellUpdateDraft) => boolean>(() => false);
   const socketUpdateCellsRef = useRef<(updates: CellUpdateDraft[]) => boolean>(() => false);
-  const socketClaimRowRef = useRef<(cell: SelectedCell) => void>(() => undefined);
   const socketFocusCellRef = useRef<(cell: SelectedCell) => void>(() => undefined);
   const socketBlurCellRef = useRef<(cell: SelectedCell) => void>(() => undefined);
 
@@ -1767,7 +1766,6 @@ export function SpreadsheetWorkspace({
     connected: socketConnected,
     updateCell: socketUpdateCell,
     updateCells: socketUpdateCells,
-    claimRow: socketClaimRow,
     focusCell: socketFocusCell,
     blurCell: socketBlurCell
   } = sheetSocket;
@@ -1837,11 +1835,6 @@ export function SpreadsheetWorkspace({
       );
       return true;
     };
-    socketClaimRowRef.current = (cell) => {
-      if (socketLiveConnected) {
-        socketClaimRow(cell.rowIndex, cell.columnKey);
-      }
-    };
     socketFocusCellRef.current = (cell) => {
       if (socketLiveConnected) {
         socketFocusCell(cell.rowIndex, cell.columnKey);
@@ -1852,7 +1845,7 @@ export function SpreadsheetWorkspace({
         socketBlurCell(cell.rowIndex, cell.columnKey);
       }
     };
-  }, [socketBlurCell, socketClaimRow, socketFocusCell, socketLiveConnected, socketUpdateCell, socketUpdateCells]);
+  }, [socketBlurCell, socketFocusCell, socketLiveConnected, socketUpdateCell, socketUpdateCells]);
 
   useEffect(() => {
     if (liveConnected && saveQueueRef.current.size > 0) {
@@ -1880,50 +1873,6 @@ export function SpreadsheetWorkspace({
     setError("Live sync disconnected. Changes are queued and will retry when it reconnects.");
   }, [clearInFlightTimeout, demoMode, liveConnected, restoreCommittedRowsWithOptimisticEdits, socketSyncEnabled]);
 
-  const claimHostedRow = useCallback(async (cell: SelectedCell): Promise<void> => {
-    const currentSnapshot = latestSnapshotRef.current;
-    const targetRow = currentSnapshot.rows.find((row) => row.rowNumber === cell.rowIndex);
-
-    if (
-      !targetRow ||
-      targetRow.ownerId ||
-      rowClaimRequestsRef.current.has(cell.rowIndex)
-    ) {
-      return;
-    }
-
-    rowClaimRequestsRef.current.add(cell.rowIndex);
-
-    try {
-      const response = await fetch("/api/rows/claim", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          sheetId: currentSnapshot.sheet.id,
-          rowIndex: cell.rowIndex,
-          columnKey: cell.columnKey,
-          sourceClientId: clientInstanceIdRef.current
-        })
-      });
-      const body = (await response.json().catch(() => null)) as {
-        snapshot?: SheetSnapshot;
-        error?: string;
-      } | null;
-
-      if (!response.ok || !body?.snapshot) {
-        throw new Error(body?.error ?? "Unable to claim this row.");
-      }
-
-      applyServerSnapshot(body.snapshot);
-      setError(null);
-      setMessage(`Row ${cell.rowIndex} claimed.`);
-    } catch (claimError) {
-      setError(claimError instanceof Error ? claimError.message : "Unable to claim this row.");
-    } finally {
-      rowClaimRequestsRef.current.delete(cell.rowIndex);
-    }
-  }, [applyServerSnapshot]);
-
   const focusLiveCell = useCallback((cell: SelectedCell): void => {
     if (demoMode || !socketSyncEnabled) {
       return;
@@ -1941,19 +1890,6 @@ export function SpreadsheetWorkspace({
     activeSocketCellRef.current = cell;
     socketFocusCellRef.current(cell);
   }, [demoMode, socketSyncEnabled]);
-
-  const claimLiveRow = useCallback((cell: SelectedCell): void => {
-    if (demoMode || snapshot.currentUser.role === Role.ADMIN) {
-      return;
-    }
-
-    if (socketSyncEnabled) {
-      socketClaimRowRef.current(cell);
-      return;
-    }
-
-    void claimHostedRow(cell);
-  }, [claimHostedRow, demoMode, snapshot.currentUser.role, socketSyncEnabled]);
 
   const blurActiveLiveCell = useCallback((): void => {
     const activeCell = activeSocketCellRef.current;
@@ -2235,7 +2171,12 @@ export function SpreadsheetWorkspace({
   }, [applyCellFormat, startTransition]);
 
   const updateSelectedColumnRules = useCallback(async (
-    patch: Partial<Pick<NonNullable<typeof selectedColumnPermission>, "duplicateHighlight" | "memberWriteOnce">>
+    patch: Partial<
+      Pick<
+        NonNullable<typeof selectedColumnPermission>,
+        "claimRowOnEdit" | "duplicateHighlight" | "memberWriteOnce"
+      >
+    >
   ): Promise<void> => {
     if (!selectedAdminColumnKey || !selectedColumnPermission) {
       setError(null);
@@ -2259,6 +2200,7 @@ export function SpreadsheetWorkspace({
         sheetId: snapshot.sheet.id,
         columnKey: selectedAdminColumnKey,
         editableByMember: selectedColumnPermission.editableByMember,
+        claimRowOnEdit: patch.claimRowOnEdit ?? selectedColumnPermission.claimRowOnEdit,
         memberWriteOnce: patch.memberWriteOnce ?? selectedColumnPermission.memberWriteOnce,
         duplicateHighlight:
           patch.duplicateHighlight ?? selectedColumnPermission.duplicateHighlight,
@@ -3031,14 +2973,6 @@ export function SpreadsheetWorkspace({
         autoFocus
         className="h-full w-full border-0 bg-[color:var(--panel)] px-2 text-sm text-[color:var(--text)] outline-none"
         value={value}
-        onFocus={() => {
-          if (isColumnKey(columnKey, snapshot.columns)) {
-            claimLiveRow({
-              rowIndex: row.rowNumber,
-              columnKey
-            });
-          }
-        }}
         onBlur={() => onClose(true)}
         onChange={(event) => {
           if (isColumnKey(columnKey, snapshot.columns)) {
@@ -3073,7 +3007,7 @@ export function SpreadsheetWorkspace({
         }}
       />
     );
-  }, [applyPastedText, claimLiveRow, snapshot.columns, startTransition]);
+  }, [applyPastedText, snapshot.columns, startTransition]);
 
   const columns = useMemo<Column<SheetGridRow>[]>(() => {
     const rowColumn: Column<SheetGridRow> = {
@@ -3314,6 +3248,21 @@ export function SpreadsheetWorkspace({
             >
               <PaintBucket size={14} />
               Duplicate {selectedAdminColumnKey ?? "--"}
+            </ToolbarTextButton>
+            <ToolbarTextButton
+              active={Boolean(selectedColumnPermission?.claimRowOnEdit)}
+              disabled={!selectedColumnPermission}
+              title="Members who save a valid value in this selected column will own that row"
+              onClick={() =>
+                startTransition(() => {
+                  void updateSelectedColumnRules({
+                    claimRowOnEdit: !selectedColumnPermission?.claimRowOnEdit
+                  });
+                })
+              }
+            >
+              <LockKeyhole size={14} />
+              Claim row {selectedAdminColumnKey ?? "--"}
             </ToolbarTextButton>
             <ToolbarTextButton
               active={Boolean(selectedColumnPermission?.memberWriteOnce)}

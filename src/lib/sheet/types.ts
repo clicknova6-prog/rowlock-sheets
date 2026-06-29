@@ -21,6 +21,7 @@ export interface AdminMemberState extends Actor {
 export interface ColumnPermissionState {
   columnKey: ColumnKey;
   editableByMember: boolean;
+  claimRowOnEdit: boolean;
   memberWriteOnce: boolean;
   duplicateHighlight: boolean;
 }

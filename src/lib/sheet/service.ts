@@ -80,8 +80,13 @@ export interface UpdateColumnRuleSettingsInput {
   sheetId: string;
   columnKey: string;
   editableByMember: boolean;
+  claimRowOnEdit: boolean;
   memberWriteOnce: boolean;
   duplicateHighlight: boolean;
+}
+
+function hasClaimableValue(cell: CellState): boolean {
+  return (cell.formula ?? cell.value).trim().length > 0;
 }
 
 function normalizeExistingCells(
@@ -317,6 +322,7 @@ async function getPermissionStates(sheetId: string): Promise<ColumnPermissionSta
     select: {
       columnKey: true,
       editableByMember: true,
+      claimRowOnEdit: true,
       memberWriteOnce: true,
       duplicateHighlight: true
     }
@@ -325,6 +331,7 @@ async function getPermissionStates(sheetId: string): Promise<ColumnPermissionSta
   return permissions.map((permission) => ({
     columnKey: assertColumnKey(permission.columnKey),
     editableByMember: permission.editableByMember,
+    claimRowOnEdit: permission.claimRowOnEdit,
     memberWriteOnce: permission.memberWriteOnce,
     duplicateHighlight: permission.duplicateHighlight
   }));
@@ -379,83 +386,8 @@ export async function claimRowForEdit(
     return getSheetSnapshot(input.sheetId, actor);
   }
 
-  const [columnPermissions, ownership, existingCell] = await Promise.all([
-    getPermissionStates(input.sheetId),
-    getOwnershipState(input.sheetId, input.rowIndex),
-    prisma.cell.findUnique({
-      where: {
-        sheetId_rowIndex_columnKey: {
-          sheetId: input.sheetId,
-          rowIndex: input.rowIndex,
-          columnKey
-        }
-      },
-      select: { value: true, formula: true }
-    })
-  ]);
-  const decision = getCellEditDecision({
-    role: actor.role,
-    userId: actor.id,
-    columnKey,
-    columnPermissions,
-    ownership,
-    currentValue: existingCell?.formula ?? existingCell?.value ?? ""
-  });
-
-  if (!decision.allowed) {
-    throw new SheetRuleError(decision.reason ?? "You cannot edit this row.");
-  }
-
-  if (ownership?.ownerId === actor.id) {
-    return getSheetSnapshot(input.sheetId, actor);
-  }
-
-  try {
-    await prisma.$transaction(
-      async (tx) => {
-        await tx.rowOwnership.create({
-          data: {
-            sheetId: input.sheetId,
-            rowIndex: input.rowIndex,
-            ownerId: actor.id
-          }
-        });
-
-        await tx.auditLog.create({
-          data: {
-            sheetId: input.sheetId,
-            actorId: actor.id,
-            action: AuditAction.ROW_CLAIMED,
-            rowIndex: input.rowIndex,
-            message: `${actor.name} claimed row ${input.rowIndex}.`
-          }
-        });
-      },
-      {
-        maxWait: 10000,
-        timeout: 30000
-      }
-    );
-  } catch (error) {
-    if (!(
-      typeof error === "object" &&
-      error !== null &&
-      "code" in error &&
-      (error as { code?: unknown }).code === "P2002"
-    )) {
-      throw error;
-    }
-
-    const liveOwnership = await getOwnershipState(input.sheetId, input.rowIndex);
-
-    if (liveOwnership?.ownerId !== actor.id) {
-      throw new SheetRuleError(
-        `This row is owned by ${liveOwnership?.ownerName ?? "another member"}.`
-      );
-    }
-  }
-
-  return getSheetSnapshot(input.sheetId, actor);
+  void columnKey;
+  throw new SheetRuleError("Rows are claimed after a valid edit is saved.");
 }
 
 export async function updateCell(
@@ -642,7 +574,12 @@ export async function updateCell(
         });
       }
 
-      if (actor.role === Role.MEMBER && !liveOwnership) {
+      if (
+        actor.role === Role.MEMBER &&
+        liveDecision.willClaimRow &&
+        !liveOwnership &&
+        hasClaimableValue(editedCell)
+      ) {
         await tx.rowOwnership.create({
           data: {
             sheetId: input.sheetId,
@@ -820,7 +757,25 @@ export async function bulkUpdateCells(
   const touchedRows = [...new Set(normalizedUpdates.map((update) => update.rowIndex))];
   const rowsToClaim =
     actor.role === Role.MEMBER
-      ? touchedRows.filter((rowIndex) => !ownershipLookup.has(rowIndex))
+      ? touchedRows.filter((rowIndex) =>
+          editedCells.some((cell) => {
+            if (cell.rowIndex !== rowIndex || ownershipLookup.has(rowIndex)) {
+              return false;
+            }
+
+            const previousCell = previousCellLookup.get(getCellKey(cell.rowIndex, cell.columnKey));
+            const decision = getCellEditDecision({
+              role: actor.role,
+              userId: actor.id,
+              columnKey: cell.columnKey,
+              columnPermissions,
+              ownership: ownershipLookup.get(rowIndex) ?? null,
+              currentValue: previousCell?.formula ?? previousCell?.value ?? ""
+            });
+
+            return decision.willClaimRow && hasClaimableValue(cell);
+          })
+        )
       : [];
 
   const editedCellKeys = new Set(
@@ -1029,6 +984,8 @@ export async function updateColumnRuleSettings(
     select: { id: true }
   });
 
+  const claimRowOnEdit = input.editableByMember && input.claimRowOnEdit;
+
   await prisma.$transaction(async (tx) => {
     await tx.columnPermission.upsert({
       where: {
@@ -1041,11 +998,13 @@ export async function updateColumnRuleSettings(
         sheetId: input.sheetId,
         columnKey,
         editableByMember: input.editableByMember,
+        claimRowOnEdit,
         memberWriteOnce: input.memberWriteOnce,
         duplicateHighlight: input.duplicateHighlight
       },
       update: {
         editableByMember: input.editableByMember,
+        claimRowOnEdit,
         memberWriteOnce: input.memberWriteOnce,
         duplicateHighlight: input.duplicateHighlight
       }
@@ -1060,6 +1019,7 @@ export async function updateColumnRuleSettings(
         message: `${actor.name} updated rules for column ${columnKey}.`,
         metadata: {
           editableByMember: input.editableByMember,
+          claimRowOnEdit,
           memberWriteOnce: input.memberWriteOnce,
           duplicateHighlight: input.duplicateHighlight
         }

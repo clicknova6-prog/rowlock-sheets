@@ -181,6 +181,7 @@ export async function getSheetSnapshot(
       select: {
         columnKey: true,
         editableByMember: true,
+        claimRowOnEdit: true,
         memberWriteOnce: true,
         duplicateHighlight: true
       }
@@ -237,6 +238,7 @@ export async function getSheetSnapshot(
     return {
       columnKey,
       editableByMember: permission?.editableByMember ?? false,
+      claimRowOnEdit: permission?.claimRowOnEdit ?? false,
       memberWriteOnce: permission?.memberWriteOnce ?? false,
       duplicateHighlight: permission?.duplicateHighlight ?? false
     };

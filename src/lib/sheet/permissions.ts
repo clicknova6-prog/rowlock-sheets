@@ -71,7 +71,7 @@ export function getCellEditDecision(input: CellEditDecisionInput): CellEditDecis
   return {
     allowed: true,
     reason: null,
-    willClaimRow: true,
+    willClaimRow: permission.claimRowOnEdit,
     state: "editable"
   };
 }

@@ -110,7 +110,8 @@ async function main() {
     data: COLUMN_KEYS.map((columnKey) => ({
       sheetId: sheet.id,
       columnKey,
-      editableByMember: ["A", "B", "D", "F", "G", "I", "J"].includes(columnKey)
+      editableByMember: ["A", "B", "D", "F", "G", "I", "J"].includes(columnKey),
+      claimRowOnEdit: ["A", "B", "D", "F", "G", "I", "J"].includes(columnKey)
     }))
   });
 

@@ -202,6 +202,8 @@ export async function saveColumnPermissionsAction(formData: FormData): Promise<v
     sheetId,
     columnKey,
     editableByMember: formData.has(`permission-${columnKey}`),
+    claimRowOnEdit:
+      formData.has(`permission-${columnKey}`) && formData.has(`claimRow-${columnKey}`),
     memberWriteOnce: formData.has(`writeOnce-${columnKey}`),
     duplicateHighlight: formData.has(`duplicateHighlight-${columnKey}`)
   }));

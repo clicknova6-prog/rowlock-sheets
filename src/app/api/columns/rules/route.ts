@@ -8,6 +8,7 @@ const updateColumnRulesSchema = z.object({
   sheetId: z.string().min(1),
   columnKey: z.string().length(1),
   editableByMember: z.boolean(),
+  claimRowOnEdit: z.boolean(),
   memberWriteOnce: z.boolean(),
   duplicateHighlight: z.boolean(),
   sourceClientId: z.string().min(1).max(128).optional()
