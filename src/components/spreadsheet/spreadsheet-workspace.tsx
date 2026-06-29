@@ -108,6 +108,11 @@ interface CellHistoryPanelState {
   error: string | null;
 }
 
+interface CellEditHistoryEntry {
+  undo: CellUpdateDraft[];
+  redo: CellUpdateDraft[];
+}
+
 interface CellLockState {
   userId: string;
   userColor: string;
@@ -129,6 +134,7 @@ const LIVE_SYNC_ACK_TIMEOUT_MS = 300000;
 const REALTIME_SNAPSHOT_REFRESH_MS = 400;
 const SELECTION_AUTO_SCROLL_EDGE_PX = 56;
 const SELECTION_AUTO_SCROLL_MAX_PX = 28;
+const MAX_CELL_HISTORY_ENTRIES = 100;
 
 interface SelectionAutoScrollState {
   frameId: number | null;
@@ -212,6 +218,10 @@ function getSelectionAutoScrollVelocity(
   return { velocityX, velocityY };
 }
 
+function clampNumber(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
+
 function isTextEditingTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) {
     return false;
@@ -254,6 +264,42 @@ function getSheetCellFromPoint(
   }
 
   return { rowIndex, columnKey };
+}
+
+function createCellEditHistoryEntry(
+  previousRows: SheetGridRow[],
+  updates: CellUpdateDraft[]
+): CellEditHistoryEntry | null {
+  const rowsByNumber = new Map(previousRows.map((row) => [row.rowNumber, row]));
+  const undoByCell = new Map<string, CellUpdateDraft>();
+  const redoByCell = new Map<string, CellUpdateDraft>();
+
+  for (const update of updates) {
+    const row = rowsByNumber.get(update.rowIndex);
+
+    if (!row) {
+      continue;
+    }
+
+    const previousValue = getRawCellValue(row, update.columnKey);
+
+    if (previousValue === update.value) {
+      continue;
+    }
+
+    const key = getCellKey(update.rowIndex, update.columnKey);
+    undoByCell.set(key, {
+      rowIndex: update.rowIndex,
+      columnKey: update.columnKey,
+      value: previousValue
+    });
+    redoByCell.set(key, update);
+  }
+
+  const undo = [...undoByCell.values()];
+  const redo = [...redoByCell.values()];
+
+  return undo.length > 0 && redo.length > 0 ? { undo, redo } : null;
 }
 
 function countEditableColumns(snapshot: SheetSnapshot): number {
@@ -730,6 +776,7 @@ export function SpreadsheetWorkspace({
   const [isSavingCells, setIsSavingCells] = useState(false);
   const [isPending, startTransition] = useTransition();
   const latestSnapshotRef = useRef(initialSnapshot);
+  const rowsRef = useRef(initialSnapshot.rows);
   const saveQueueRef = useRef<Map<string, CellUpdateDraft>>(new Map());
   const inFlightUpdatesRef = useRef<Map<string, CellUpdateDraft>>(new Map());
   const autosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -737,6 +784,9 @@ export function SpreadsheetWorkspace({
   const snapshotRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const gridShellRef = useRef<HTMLDivElement | null>(null);
   const dataGridRef = useRef<DataGridHandle | null>(null);
+  const selectedCellRef = useRef<SelectedCell | null>(null);
+  const selectedRangeRef = useRef<SelectedCellRange | null>(null);
+  const isRangeSelectingRef = useRef(false);
   const selectionKeyboardActiveRef = useRef(false);
   const selectionAutoScrollRef = useRef<SelectionAutoScrollState>({
     frameId: null,
@@ -746,6 +796,8 @@ export function SpreadsheetWorkspace({
     pointerY: 0
   });
   const runSelectionAutoScrollRef = useRef<() => void>(() => undefined);
+  const undoStackRef = useRef<CellEditHistoryEntry[]>([]);
+  const redoStackRef = useRef<CellEditHistoryEntry[]>([]);
   const saveInFlightRef = useRef(false);
   const flushQueuedCellUpdatesRef = useRef<() => Promise<boolean>>(async () => true);
   const activeSocketCellRef = useRef<SelectedCell | null>(null);
@@ -835,10 +887,31 @@ export function SpreadsheetWorkspace({
     autoScrollState.velocityX = 0;
     autoScrollState.velocityY = 0;
   }, []);
+  const isSheetInteractionActive = useCallback((target: EventTarget | null): boolean => {
+    const shell = gridShellRef.current;
+    const targetNode = target instanceof Node ? target : null;
+    const activeElement = document.activeElement;
+    const eventStartedInGrid = Boolean(shell && targetNode && shell.contains(targetNode));
+    const focusIsInGrid = Boolean(shell && activeElement && shell.contains(activeElement));
+
+    return selectionKeyboardActiveRef.current || eventStartedInGrid || focusIsInGrid;
+  }, []);
 
   useEffect(() => {
     latestSnapshotRef.current = snapshot;
   }, [snapshot]);
+
+  useEffect(() => {
+    rowsRef.current = rows;
+  }, [rows]);
+
+  useEffect(() => {
+    selectedCellRef.current = selectedCell;
+  }, [selectedCell]);
+
+  useEffect(() => {
+    selectedRangeRef.current = selectedRange;
+  }, [selectedRange]);
 
   useEffect(() => {
     function warnBeforeUnload(event: BeforeUnloadEvent): void {
@@ -867,11 +940,14 @@ export function SpreadsheetWorkspace({
   }, []);
 
   useEffect(() => {
+    isRangeSelectingRef.current = isRangeSelecting;
+
     if (!isRangeSelecting) {
       return;
     }
 
     function stopRangeSelection(): void {
+      isRangeSelectingRef.current = false;
       setIsRangeSelecting(false);
       stopSelectionAutoScroll();
     }
@@ -933,6 +1009,7 @@ export function SpreadsheetWorkspace({
 
     setSnapshot(serverSnapshot);
     setRows(nextRows);
+    rowsRef.current = nextRows;
   }, []);
 
   const scheduleQueuedSave = useCallback((delayMs = CELL_AUTOSAVE_DEBOUNCE_MS): void => {
@@ -1110,6 +1187,161 @@ export function SpreadsheetWorkspace({
     scheduleQueuedSave(delayMs);
   }, [flushQueuedCellUpdates, scheduleQueuedSave]);
 
+  const recordCellEditHistory = useCallback((
+    previousRows: SheetGridRow[],
+    updates: CellUpdateDraft[]
+  ): void => {
+    const historyEntry = createCellEditHistoryEntry(previousRows, updates);
+
+    if (!historyEntry) {
+      return;
+    }
+
+    undoStackRef.current = [
+      ...undoStackRef.current.slice(-(MAX_CELL_HISTORY_ENTRIES - 1)),
+      historyEntry
+    ];
+    redoStackRef.current = [];
+  }, []);
+
+  const applyHistoryUpdates = useCallback(async (
+    updates: CellUpdateDraft[],
+    label: string
+  ): Promise<void> => {
+    const currentRows = rowsRef.current;
+    const rowsByNumber = new Map(currentRows.map((row) => [row.rowNumber, row]));
+    const filteredUpdates = updates.filter((update) => {
+      const row = rowsByNumber.get(update.rowIndex);
+
+      return Boolean(
+        row &&
+          row.__editable[update.columnKey] &&
+          getRawCellValue(row, update.columnKey) !== update.value &&
+          !isCellLockedByOther(
+            locks,
+            update.rowIndex,
+            update.columnKey,
+            latestSnapshotRef.current.currentUser.id
+          )
+      );
+    });
+
+    if (filteredUpdates.length === 0) {
+      setError(null);
+      setMessage(`${label} skipped because the affected cells are locked or unchanged.`);
+      return;
+    }
+
+    const nextRows = applyUpdatesToRows(currentRows, filteredUpdates);
+    let nextSnapshot = latestSnapshotRef.current;
+
+    rowsRef.current = nextRows;
+    setRows(nextRows);
+    setError(null);
+    setMessage(`${label}...`);
+
+    if (demoMode) {
+      for (const update of filteredUpdates) {
+        const result = applyDemoCellUpdate(
+          nextSnapshot,
+          update.rowIndex,
+          update.columnKey,
+          update.value
+        );
+
+        if (!result.snapshot) {
+          setRows(currentRows);
+          rowsRef.current = currentRows;
+          setError(`${update.columnKey}${update.rowIndex}: ${result.error ?? `${label} failed.`}`);
+          return;
+        }
+
+        nextSnapshot = result.snapshot;
+      }
+
+      latestSnapshotRef.current = nextSnapshot;
+      setSnapshot(nextSnapshot);
+      setRows(nextSnapshot.rows);
+      rowsRef.current = nextSnapshot.rows;
+      setMessage(`${label} complete.`);
+      return;
+    }
+
+    queueCellUpdates(filteredUpdates, `${label}.`, BULK_AUTOSAVE_DEBOUNCE_MS);
+  }, [demoMode, locks, queueCellUpdates]);
+
+  const undoLastCellEdit = useCallback((): void => {
+    const historyEntry = undoStackRef.current.pop();
+
+    if (!historyEntry) {
+      setError(null);
+      setMessage("Nothing to undo.");
+      return;
+    }
+
+    redoStackRef.current = [
+      ...redoStackRef.current.slice(-(MAX_CELL_HISTORY_ENTRIES - 1)),
+      historyEntry
+    ];
+
+    startTransition(() => {
+      void applyHistoryUpdates(historyEntry.undo, "Undo");
+    });
+  }, [applyHistoryUpdates, startTransition]);
+
+  const redoLastCellEdit = useCallback((): void => {
+    const historyEntry = redoStackRef.current.pop();
+
+    if (!historyEntry) {
+      setError(null);
+      setMessage("Nothing to redo.");
+      return;
+    }
+
+    undoStackRef.current = [
+      ...undoStackRef.current.slice(-(MAX_CELL_HISTORY_ENTRIES - 1)),
+      historyEntry
+    ];
+
+    startTransition(() => {
+      void applyHistoryUpdates(historyEntry.redo, "Redo");
+    });
+  }, [applyHistoryUpdates, startTransition]);
+
+  const selectAllCells = useCallback((): void => {
+    const columns = latestSnapshotRef.current.columns;
+    const currentRows = rowsRef.current;
+    const firstRowIndex = currentRows[0]?.rowNumber ?? 1;
+    const lastRowIndex = currentRows[currentRows.length - 1]?.rowNumber ?? MAX_ROWS;
+    const firstColumnKey = columns[0];
+    const lastColumnKey = columns[columns.length - 1];
+
+    if (!firstColumnKey || !lastColumnKey) {
+      return;
+    }
+
+    const anchor = {
+      rowIndex: firstRowIndex,
+      columnKey: firstColumnKey
+    };
+    const focus = {
+      rowIndex: lastRowIndex,
+      columnKey: lastColumnKey
+    };
+    const range = { anchor, focus };
+
+    isRangeSelectingRef.current = false;
+    selectionKeyboardActiveRef.current = true;
+    selectedCellRef.current = anchor;
+    selectedRangeRef.current = range;
+    setIsRangeSelecting(false);
+    stopSelectionAutoScroll();
+    setSelectedCell(anchor);
+    setSelectedRange(range);
+    setError(null);
+    setMessage(`Selected ${firstColumnKey}${firstRowIndex}:${lastColumnKey}${lastRowIndex}.`);
+  }, [stopSelectionAutoScroll]);
+
   const applySocketRows = useCallback((incomingRows: SheetGridRow[]): void => {
     const currentSnapshot = latestSnapshotRef.current;
     const mergedRows =
@@ -1133,6 +1365,7 @@ export function SpreadsheetWorkspace({
     latestSnapshotRef.current = committedSnapshot;
     setSnapshot(committedSnapshot);
     setRows(visibleRows);
+    rowsRef.current = visibleRows;
   }, []);
 
   const finishInFlightUpdate = useCallback((rowIndex: number, columnKey: ColumnKey): void => {
@@ -1178,6 +1411,7 @@ export function SpreadsheetWorkspace({
         : latestSnapshotRef.current.rows;
 
     setRows(visibleRows);
+    rowsRef.current = visibleRows;
   }, []);
 
   const refreshLatestSnapshot = useCallback(async (): Promise<void> => {
@@ -1648,6 +1882,7 @@ export function SpreadsheetWorkspace({
       updates.length === 1 ? `${firstUpdate.columnKey}${firstUpdate.rowIndex}` : `${updates.length} cells`;
 
     setRows(nextRows);
+    rowsRef.current = nextRows;
     setError(null);
     setMessage(null);
 
@@ -1673,10 +1908,13 @@ export function SpreadsheetWorkspace({
 
       setSnapshot(nextSnapshot);
       setRows(nextSnapshot.rows);
+      rowsRef.current = nextSnapshot.rows;
+      recordCellEditHistory(previousRows, updates);
       setMessage(`${savedLabel} saved locally.`);
       return;
     }
 
+    recordCellEditHistory(previousRows, updates);
     queueCellUpdates(updates, `${savedLabel} changed.`);
   }
 
@@ -1709,6 +1947,7 @@ export function SpreadsheetWorkspace({
     let nextSnapshot = snapshot;
 
     setRows(nextRows);
+    rowsRef.current = nextRows;
     setError(null);
     setMessage("Clearing...");
 
@@ -1732,19 +1971,35 @@ export function SpreadsheetWorkspace({
 
       setSnapshot(nextSnapshot);
       setRows(nextSnapshot.rows);
+      rowsRef.current = nextSnapshot.rows;
+      recordCellEditHistory(previousRows, updates);
       setMessage(`Cleared ${updates.length} cell${updates.length === 1 ? "" : "s"} locally.`);
       return;
     }
 
+    recordCellEditHistory(previousRows, updates);
     queueCellUpdates(
       updates,
       `Cleared ${updates.length} cell${updates.length === 1 ? "" : "s"}.`,
       BULK_AUTOSAVE_DEBOUNCE_MS
     );
-  }, [demoMode, locks, queueCellUpdates, rows, selectedCell, selectedRange, snapshot]);
+  }, [demoMode, locks, queueCellUpdates, recordCellEditHistory, rows, selectedCell, selectedRange, snapshot]);
 
   useEffect(() => {
     function handleDocumentKeyDown(event: KeyboardEvent): void {
+      if (
+        event.key === "Escape" &&
+        isRangeSelectingRef.current &&
+        isSheetInteractionActive(event.target) &&
+        !isTextEditingTarget(event.target)
+      ) {
+        event.preventDefault();
+        isRangeSelectingRef.current = false;
+        setIsRangeSelecting(false);
+        stopSelectionAutoScroll();
+        return;
+      }
+
       if (
         event.defaultPrevented ||
         (event.key !== "Backspace" && event.key !== "Delete") ||
@@ -1754,13 +2009,7 @@ export function SpreadsheetWorkspace({
         return;
       }
 
-      const shell = gridShellRef.current;
-      const target = event.target instanceof Node ? event.target : null;
-      const activeElement = document.activeElement;
-      const eventStartedInGrid = Boolean(shell && target && shell.contains(target));
-      const focusIsInGrid = Boolean(shell && activeElement && shell.contains(activeElement));
-
-      if (!selectionKeyboardActiveRef.current && !eventStartedInGrid && !focusIsInGrid) {
+      if (!isSheetInteractionActive(event.target)) {
         return;
       }
 
@@ -1775,7 +2024,14 @@ export function SpreadsheetWorkspace({
     return () => {
       document.removeEventListener("keydown", handleDocumentKeyDown);
     };
-  }, [clearSelectedCells, selectedCell, selectedRange, startTransition]);
+  }, [
+    clearSelectedCells,
+    isSheetInteractionActive,
+    selectedCell,
+    selectedRange,
+    startTransition,
+    stopSelectionAutoScroll
+  ]);
 
   const applyCellFormat = useCallback(async (
     format: CellFormatPatch = {},
@@ -2041,35 +2297,38 @@ export function SpreadsheetWorkspace({
   }, [demoMode, flushQueuedCellUpdates, snapshot]);
 
   const updateRangeFocus = useCallback((cell: SelectedCell): void => {
-    if (!isAdmin || !isRangeSelecting) {
+    if (!isAdmin || !isRangeSelectingRef.current) {
       return;
     }
 
+    selectedCellRef.current = cell;
     setSelectedCell(cell);
     setSelectedRange((currentRange) => {
-      if (!currentRange) {
-        return { anchor: cell, focus: cell };
-      }
+      const nextRange = currentRange
+        ? {
+            ...currentRange,
+            focus: cell
+          }
+        : { anchor: cell, focus: cell };
 
       if (
+        currentRange &&
         currentRange.focus.rowIndex === cell.rowIndex &&
         currentRange.focus.columnKey === cell.columnKey
       ) {
         return currentRange;
       }
 
-      return {
-        ...currentRange,
-        focus: cell
-      };
+      selectedRangeRef.current = nextRange;
+      return nextRange;
     });
-  }, [isAdmin, isRangeSelecting]);
+  }, [isAdmin]);
 
   const updateRangeFocusFromPointer = useCallback((
     clientX: number,
     clientY: number,
     rect?: DOMRect
-  ): void => {
+  ): boolean => {
     const cell = getSheetCellFromPoint(
       clientX,
       clientY,
@@ -2079,6 +2338,45 @@ export function SpreadsheetWorkspace({
 
     if (cell) {
       updateRangeFocus(cell);
+      return true;
+    }
+
+    return false;
+  }, [updateRangeFocus]);
+
+  const advanceRangeFocusForAutoScroll = useCallback((velocityX: number, velocityY: number): void => {
+    const currentRange = selectedRangeRef.current;
+    const currentFocus = currentRange?.focus ?? selectedCellRef.current;
+    const columns = latestSnapshotRef.current.columns;
+
+    if (!currentFocus || columns.length === 0) {
+      return;
+    }
+
+    const currentColumnIndex = columns.indexOf(currentFocus.columnKey);
+
+    if (currentColumnIndex < 0) {
+      return;
+    }
+
+    const currentRows = rowsRef.current;
+    const maxRowIndex = currentRows[currentRows.length - 1]?.rowNumber ?? MAX_ROWS;
+    const rowStep =
+      velocityY === 0 ? 0 : Math.sign(velocityY) * Math.max(1, Math.ceil(Math.abs(velocityY) / 14));
+    const columnStep =
+      velocityX === 0 ? 0 : Math.sign(velocityX) * Math.max(1, Math.ceil(Math.abs(velocityX) / 18));
+    const nextRowIndex = clampNumber(currentFocus.rowIndex + rowStep, 1, maxRowIndex);
+    const nextColumnIndex = clampNumber(currentColumnIndex + columnStep, 0, columns.length - 1);
+    const nextCell = {
+      rowIndex: nextRowIndex,
+      columnKey: columns[nextColumnIndex]
+    };
+
+    if (
+      nextCell.rowIndex !== currentFocus.rowIndex ||
+      nextCell.columnKey !== currentFocus.columnKey
+    ) {
+      updateRangeFocus(nextCell);
     }
   }, [updateRangeFocus]);
 
@@ -2106,20 +2404,27 @@ export function SpreadsheetWorkspace({
           scrollElement.scrollLeft !== previousScrollLeft ||
           scrollElement.scrollTop !== previousScrollTop
         ) {
-          updateRangeFocusFromPointer(
+          const pointerUpdatedRange = updateRangeFocusFromPointer(
             autoScrollState.pointerX,
             autoScrollState.pointerY,
             scrollElement.getBoundingClientRect()
           );
+
+          if (!pointerUpdatedRange) {
+            advanceRangeFocusForAutoScroll(
+              autoScrollState.velocityX,
+              autoScrollState.velocityY
+            );
+          }
         }
       }
 
       autoScrollState.frameId = window.requestAnimationFrame(runSelectionAutoScrollRef.current);
     };
-  }, [getGridScrollElement, updateRangeFocusFromPointer]);
+  }, [advanceRangeFocusForAutoScroll, getGridScrollElement, updateRangeFocusFromPointer]);
 
   const updateSelectionAutoScrollAtPoint = useCallback((clientX: number, clientY: number): void => {
-    if (!isRangeSelecting) {
+    if (!isRangeSelectingRef.current) {
       stopSelectionAutoScroll();
       return;
     }
@@ -2151,7 +2456,7 @@ export function SpreadsheetWorkspace({
     if (autoScrollState.frameId === null) {
       autoScrollState.frameId = window.requestAnimationFrame(runSelectionAutoScrollRef.current);
     }
-  }, [getGridScrollElement, isRangeSelecting, stopSelectionAutoScroll]);
+  }, [getGridScrollElement, stopSelectionAutoScroll]);
 
   const updateSelectionAutoScroll = useCallback((event: React.MouseEvent<HTMLElement>): void => {
     updateSelectionAutoScrollAtPoint(event.clientX, event.clientY);
@@ -2306,6 +2611,7 @@ export function SpreadsheetWorkspace({
     let nextSnapshot = snapshot;
     let firstError: string | null = null;
     let appliedCount = 0;
+    const appliedUpdates: CellUpdateDraft[] = [];
 
     setError(null);
     setMessage("Pasting...");
@@ -2338,6 +2644,11 @@ export function SpreadsheetWorkspace({
           }
 
           nextSnapshot = result.snapshot;
+          appliedUpdates.push({
+            rowIndex,
+            columnKey,
+            value: pastedGrid[rowOffset][columnOffset]
+          });
           appliedCount += 1;
         }
 
@@ -2380,7 +2691,12 @@ export function SpreadsheetWorkspace({
       }
 
       if (updates.length > 0) {
-        setRows(applyUpdatesToRows(rows, updates));
+        const previousRows = rows;
+        const nextRows = applyUpdatesToRows(rows, updates);
+
+        setRows(nextRows);
+        rowsRef.current = nextRows;
+        recordCellEditHistory(previousRows, updates);
         queueCellUpdates(
           updates,
           `Pasted ${updates.length} cell${updates.length === 1 ? "" : "s"}.`,
@@ -2393,6 +2709,8 @@ export function SpreadsheetWorkspace({
     if (appliedCount > 0) {
       setSnapshot(nextSnapshot);
       setRows(nextSnapshot.rows);
+      rowsRef.current = nextSnapshot.rows;
+      recordCellEditHistory(rows, appliedUpdates);
       setMessage(`Pasted ${appliedCount} cell${appliedCount === 1 ? "" : "s"}.`);
     }
 
@@ -2401,7 +2719,154 @@ export function SpreadsheetWorkspace({
     } else {
       setError(null);
     }
-  }, [demoMode, locks, queueCellUpdates, rows, snapshot]);
+  }, [demoMode, locks, queueCellUpdates, recordCellEditHistory, rows, snapshot]);
+
+  useEffect(() => {
+    function handleSpreadsheetShortcut(event: KeyboardEvent): void {
+      const shortcutKey = event.key.toLowerCase();
+      const hasModifier = event.ctrlKey || event.metaKey;
+
+      if (
+        event.defaultPrevented ||
+        !hasModifier ||
+        isTextEditingTarget(event.target) ||
+        !isSheetInteractionActive(event.target)
+      ) {
+        return;
+      }
+
+      if (shortcutKey === "a") {
+        event.preventDefault();
+        selectAllCells();
+        return;
+      }
+
+      if (shortcutKey === "z") {
+        event.preventDefault();
+
+        if (event.shiftKey) {
+          redoLastCellEdit();
+        } else {
+          undoLastCellEdit();
+        }
+
+        return;
+      }
+
+      if (shortcutKey === "y") {
+        event.preventDefault();
+        redoLastCellEdit();
+        return;
+      }
+
+      if (!isAdmin) {
+        return;
+      }
+
+      if (shortcutKey === "b") {
+        event.preventDefault();
+        queueFormatUpdate({ bold: !selectedFormat.bold });
+        return;
+      }
+
+      if (shortcutKey === "i") {
+        event.preventDefault();
+        queueFormatUpdate({ italic: !selectedFormat.italic });
+        return;
+      }
+
+      if (shortcutKey === "u") {
+        event.preventDefault();
+        queueFormatUpdate({ underline: !selectedFormat.underline });
+      }
+    }
+
+    document.addEventListener("keydown", handleSpreadsheetShortcut);
+
+    return () => {
+      document.removeEventListener("keydown", handleSpreadsheetShortcut);
+    };
+  }, [
+    isAdmin,
+    isSheetInteractionActive,
+    queueFormatUpdate,
+    redoLastCellEdit,
+    selectAllCells,
+    selectedFormat.bold,
+    selectedFormat.italic,
+    selectedFormat.underline,
+    undoLastCellEdit
+  ]);
+
+  useEffect(() => {
+    function shouldHandleClipboardEvent(event: ClipboardEvent): boolean {
+      return (
+        !event.defaultPrevented &&
+        !isTextEditingTarget(event.target) &&
+        isSheetInteractionActive(event.target) &&
+        Boolean(selectedCellRef.current || selectedRangeRef.current)
+      );
+    }
+
+    function handleDocumentCopy(event: ClipboardEvent): void {
+      if (!shouldHandleClipboardEvent(event) || !selectedClipboardValue) {
+        return;
+      }
+
+      event.clipboardData?.setData("text/plain", selectedClipboardValue);
+      event.preventDefault();
+      setError(null);
+      setMessage("Copied selection.");
+    }
+
+    function handleDocumentCut(event: ClipboardEvent): void {
+      if (!shouldHandleClipboardEvent(event) || !selectedClipboardValue) {
+        return;
+      }
+
+      event.clipboardData?.setData("text/plain", selectedClipboardValue);
+      event.preventDefault();
+      startTransition(() => {
+        void clearSelectedCells();
+      });
+    }
+
+    function handleDocumentPaste(event: ClipboardEvent): void {
+      if (!shouldHandleClipboardEvent(event)) {
+        return;
+      }
+
+      const clipboardText = event.clipboardData?.getData("text/plain") ?? "";
+      const pasteStartCell =
+        getRangeStartCell(selectedRangeRef.current, latestSnapshotRef.current.columns) ??
+        selectedCellRef.current;
+
+      if (!clipboardText || !pasteStartCell) {
+        return;
+      }
+
+      event.preventDefault();
+      startTransition(() => {
+        void applyPastedText(pasteStartCell.rowIndex, pasteStartCell.columnKey, clipboardText);
+      });
+    }
+
+    document.addEventListener("copy", handleDocumentCopy);
+    document.addEventListener("cut", handleDocumentCut);
+    document.addEventListener("paste", handleDocumentPaste);
+
+    return () => {
+      document.removeEventListener("copy", handleDocumentCopy);
+      document.removeEventListener("cut", handleDocumentCut);
+      document.removeEventListener("paste", handleDocumentPaste);
+    };
+  }, [
+    applyPastedText,
+    clearSelectedCells,
+    isSheetInteractionActive,
+    selectedClipboardValue,
+    startTransition
+  ]);
 
   function handleSelectedCellPaste(event: React.ClipboardEvent<HTMLTextAreaElement>): void {
     const pasteStartCell = getRangeStartCell(selectedRange, snapshot.columns) ?? selectedCell;
@@ -2899,9 +3364,13 @@ export function SpreadsheetWorkspace({
                 rowIndex: args.row.rowNumber,
                 columnKey: snapshot.columns[snapshot.columns.length - 1]
               };
+              const range = { anchor, focus };
 
+              selectedCellRef.current = anchor;
+              selectedRangeRef.current = range;
+              isRangeSelectingRef.current = true;
               setSelectedCell(anchor);
-              setSelectedRange({ anchor, focus });
+              setSelectedRange(range);
               setIsRangeSelecting(true);
               focusLiveCell(anchor);
               args.selectCell(false);
@@ -2919,9 +3388,13 @@ export function SpreadsheetWorkspace({
               rowIndex: args.row.rowNumber,
               columnKey: args.column.key
             };
+            const range = { anchor: cell, focus: cell };
 
+            selectedCellRef.current = cell;
+            selectedRangeRef.current = range;
+            isRangeSelectingRef.current = true;
             setSelectedCell(cell);
-            setSelectedRange({ anchor: cell, focus: cell });
+            setSelectedRange(range);
             setIsRangeSelecting(true);
             focusLiveCell(cell);
             args.selectCell(false);
@@ -3005,6 +3478,9 @@ export function SpreadsheetWorkspace({
             };
 
             setIsRangeSelecting(false);
+            isRangeSelectingRef.current = false;
+            selectedCellRef.current = cell;
+            selectedRangeRef.current = { anchor: cell, focus: cell };
             setSelectedCell(cell);
             setSelectedRange({ anchor: cell, focus: cell });
             event.preventDefault();
@@ -3019,11 +3495,15 @@ export function SpreadsheetWorkspace({
               };
 
               selectionKeyboardActiveRef.current = true;
+              selectedCellRef.current = cell;
               setSelectedCell(cell);
               focusLiveCell(cell);
 
               if (!isRangeSelecting) {
-                setSelectedRange({ anchor: cell, focus: cell });
+                const range = { anchor: cell, focus: cell };
+
+                selectedRangeRef.current = range;
+                setSelectedRange(range);
               }
             }
           }}
