@@ -66,7 +66,8 @@ export function createDemoSnapshot(): SheetSnapshot {
     columns: [...COLUMN_KEYS],
     viewSetting: {
       ...DEFAULT_SHEET_VIEW_SETTING,
-      alternateRowColors: true
+      alternateRowColors: true,
+      columnWidths: {}
     },
     columnPermissions: COLUMN_KEYS.map((columnKey) => ({
       columnKey,

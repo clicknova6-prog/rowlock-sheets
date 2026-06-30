@@ -37,6 +37,7 @@ import {
   Row,
   type CellRendererProps,
   type Column,
+  type ColumnWidth,
   type ColumnWidths,
   type DataGridHandle,
   type FillEvent,
@@ -222,6 +223,42 @@ function renderWrappedCellText(value: string): React.ReactNode {
       </span>
     );
   });
+}
+
+function createColumnWidthsFromViewSetting(
+  widths: SheetViewSettingState["columnWidths"]
+): ColumnWidths {
+  const columnWidths = new Map<string, ColumnWidth>();
+
+  for (const [columnKey, width] of Object.entries(widths)) {
+    const numericWidth = Number(width);
+
+    if (Number.isFinite(numericWidth) && numericWidth > 0) {
+      columnWidths.set(columnKey, {
+        type: "resized",
+        width: Math.round(numericWidth)
+      });
+    }
+  }
+
+  return columnWidths;
+}
+
+function serializeColumnWidths(
+  widths: ColumnWidths,
+  columns: ColumnKey[]
+): Partial<Record<ColumnKey, number>> {
+  const serialized: Partial<Record<ColumnKey, number>> = {};
+
+  for (const columnKey of columns) {
+    const width = Number(widths.get(columnKey)?.width);
+
+    if (Number.isFinite(width) && width > 0) {
+      serialized[columnKey] = Math.round(width);
+    }
+  }
+
+  return serialized;
 }
 
 function getSelectionEdgeVelocity(distance: number): number {
@@ -982,7 +1019,9 @@ export function SpreadsheetWorkspace({
 }: SpreadsheetWorkspaceProps) {
   const [snapshot, setSnapshot] = useState(initialSnapshot);
   const [rows, setRows] = useState(initialSnapshot.rows);
-  const [columnWidths, setColumnWidths] = useState<ColumnWidths>(() => new Map());
+  const [columnWidths, setColumnWidths] = useState<ColumnWidths>(() =>
+    createColumnWidthsFromViewSetting(initialSnapshot.viewSetting.columnWidths)
+  );
   const [selectedCell, setSelectedCell] = useState<SelectedCell | null>(null);
   const [selectedRange, setSelectedRange] = useState<SelectedCellRange | null>(null);
   const [isRangeSelecting, setIsRangeSelecting] = useState(false);
@@ -1004,6 +1043,7 @@ export function SpreadsheetWorkspace({
   const autosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const inFlightTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const snapshotRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const columnWidthSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const gridShellRef = useRef<HTMLDivElement | null>(null);
   const dataGridRef = useRef<DataGridHandle | null>(null);
   const selectedCellRef = useRef<SelectedCell | null>(null);
@@ -1094,6 +1134,64 @@ export function SpreadsheetWorkspace({
       getResponsiveRowHeight(row, snapshot.columns, snapshot.viewSetting.fontSize, columnWidths),
     [columnWidths, snapshot.columns, snapshot.viewSetting.fontSize]
   );
+  const persistColumnWidths = useCallback(async (
+    nextColumnWidths: Partial<Record<ColumnKey, number>>
+  ): Promise<void> => {
+    if (demoMode || !isAdmin) {
+      return;
+    }
+
+    try {
+      const response = await fetch("/api/sheets/view-settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sheetId: latestSnapshotRef.current.sheet.id,
+          columnWidths: nextColumnWidths
+        })
+      });
+      const body = (await response.json().catch(() => null)) as {
+        viewSetting?: SheetViewSettingState;
+        error?: string;
+      } | null;
+
+      if (!response.ok || !body?.viewSetting) {
+        throw new Error(body?.error ?? "Column widths could not be saved.");
+      }
+
+      const currentSnapshot = latestSnapshotRef.current;
+      const nextSnapshot = {
+        ...currentSnapshot,
+        viewSetting: body.viewSetting
+      };
+
+      latestSnapshotRef.current = nextSnapshot;
+      setSnapshot(nextSnapshot);
+      setMessage("Column widths saved.");
+      setError(null);
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : "Column widths could not be saved.");
+    }
+  }, [demoMode, isAdmin]);
+  const handleColumnWidthsChange = useCallback((nextColumnWidths: ColumnWidths): void => {
+    setColumnWidths(nextColumnWidths);
+
+    if (columnWidthSaveTimerRef.current) {
+      clearTimeout(columnWidthSaveTimerRef.current);
+      columnWidthSaveTimerRef.current = null;
+    }
+
+    if (demoMode || !isAdmin) {
+      return;
+    }
+
+    const serializedWidths = serializeColumnWidths(nextColumnWidths, snapshot.columns);
+
+    columnWidthSaveTimerRef.current = setTimeout(() => {
+      columnWidthSaveTimerRef.current = null;
+      void persistColumnWidths(serializedWidths);
+    }, 700);
+  }, [demoMode, isAdmin, persistColumnWidths, snapshot.columns]);
   const getGridScrollElement = useCallback((): HTMLElement | null => {
     return dataGridRef.current?.element ?? gridShellRef.current?.querySelector<HTMLElement>(".rdg") ?? null;
   }, []);
@@ -1157,6 +1255,9 @@ export function SpreadsheetWorkspace({
       if (snapshotRefreshTimerRef.current) {
         clearTimeout(snapshotRefreshTimerRef.current);
       }
+      if (columnWidthSaveTimerRef.current) {
+        clearTimeout(columnWidthSaveTimerRef.current);
+      }
     };
   }, []);
 
@@ -1218,6 +1319,7 @@ export function SpreadsheetWorkspace({
 
   const applyServerSnapshot = useCallback((serverSnapshot: SheetSnapshot): void => {
     latestSnapshotRef.current = serverSnapshot;
+    setColumnWidths(createColumnWidthsFromViewSetting(serverSnapshot.viewSetting.columnWidths));
 
     const queuedUpdates = [
       ...inFlightUpdatesRef.current.values(),
@@ -3596,7 +3698,7 @@ export function SpreadsheetWorkspace({
               "--sheet-font-size": `${snapshot.viewSetting.fontSize}px`
             } as CSSProperties
           }
-          onColumnWidthsChange={setColumnWidths}
+          onColumnWidthsChange={handleColumnWidthsChange}
           onRowsChange={handleRowsChange}
           onFill={isAdmin ? handleFill : undefined}
           onCellMouseDown={(args, event) => {

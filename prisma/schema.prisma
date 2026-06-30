@@ -138,6 +138,7 @@ model SheetViewSetting {
   alternateOddColor  String   @default("#ffffff") @db.VarChar(20)
   alternateEvenColor String   @default("#f8fafc") @db.VarChar(20)
   fontSize           Int      @default(14)
+  columnWidths       Json?
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
 

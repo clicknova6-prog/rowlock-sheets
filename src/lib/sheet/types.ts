@@ -72,6 +72,7 @@ export interface SheetViewSettingState {
   alternateOddColor: string;
   alternateEvenColor: string;
   fontSize: number;
+  columnWidths: Partial<Record<ColumnKey, number>>;
 }
 
 export interface ValidationRuleState {

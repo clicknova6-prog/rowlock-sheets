@@ -6,9 +6,13 @@ import type { ColumnKey } from "@/lib/constants";
 import { prisma } from "@/lib/db";
 import {
   createDefaultCellFormat,
+  DEFAULT_SHEET_VIEW_SETTING,
   isDefaultCellFormat,
   mergeCellFormat,
-  normalizeFormatPatch
+  normalizeFormatPatch,
+  normalizeHexColor,
+  normalizeSheetColumnWidths,
+  normalizeSheetFontSize
 } from "./formatting";
 import { normalizeCellInput, recalculateCells, mergeRecalculatedCells } from "./formulas";
 import { getCellEditDecision } from "./permissions";
@@ -24,6 +28,7 @@ import type {
   ColumnPermissionState,
   ConditionalRuleState,
   RowOwnershipState,
+  SheetViewSettingState,
   SheetSnapshot
 } from "./types";
 
@@ -84,6 +89,11 @@ export interface UpdateColumnRuleSettingsInput {
   memberWriteOnce: boolean;
   duplicateHighlight: boolean;
   matchHighlightTerms?: string[];
+}
+
+export interface UpdateSheetColumnWidthsInput {
+  sheetId: string;
+  columnWidths: Record<string, number>;
 }
 
 function hasClaimableValue(cell: CellState): boolean {
@@ -1051,6 +1061,54 @@ export async function updateColumnRuleSettings(
   });
 
   return getSheetSnapshot(input.sheetId, actor);
+}
+
+export async function updateSheetColumnWidths(
+  actor: Actor,
+  input: UpdateSheetColumnWidthsInput
+): Promise<SheetViewSettingState> {
+  if (actor.role !== Role.ADMIN) {
+    throw new SheetRuleError("Only admins can save column widths.", 403);
+  }
+
+  const columnWidths = normalizeSheetColumnWidths(input.columnWidths);
+
+  await prisma.sheet.findUniqueOrThrow({
+    where: { id: input.sheetId },
+    select: { id: true }
+  });
+
+  const viewSetting = await prisma.sheetViewSetting.upsert({
+    where: { sheetId: input.sheetId },
+    create: {
+      sheetId: input.sheetId,
+      alternateRowColors: DEFAULT_SHEET_VIEW_SETTING.alternateRowColors,
+      alternateOddColor: DEFAULT_SHEET_VIEW_SETTING.alternateOddColor,
+      alternateEvenColor: DEFAULT_SHEET_VIEW_SETTING.alternateEvenColor,
+      fontSize: DEFAULT_SHEET_VIEW_SETTING.fontSize,
+      columnWidths
+    },
+    update: { columnWidths },
+    select: {
+      alternateRowColors: true,
+      alternateOddColor: true,
+      alternateEvenColor: true,
+      fontSize: true,
+      columnWidths: true
+    }
+  });
+
+  return {
+    alternateRowColors: viewSetting.alternateRowColors,
+    alternateOddColor:
+      normalizeHexColor(viewSetting.alternateOddColor) ??
+      DEFAULT_SHEET_VIEW_SETTING.alternateOddColor,
+    alternateEvenColor:
+      normalizeHexColor(viewSetting.alternateEvenColor) ??
+      DEFAULT_SHEET_VIEW_SETTING.alternateEvenColor,
+    fontSize: normalizeSheetFontSize(viewSetting.fontSize),
+    columnWidths: normalizeSheetColumnWidths(viewSetting.columnWidths)
+  };
 }
 
 export async function unlockAllRows(actor: Actor, sheetId: string): Promise<SheetSnapshot> {
