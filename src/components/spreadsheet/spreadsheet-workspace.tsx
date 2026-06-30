@@ -52,7 +52,6 @@ import type { ColumnKey } from "@/lib/constants";
 import { useSheet } from "@/hooks/useSheet";
 import { useSheetPresence } from "@/hooks/useSheetPresence";
 import { useSheetRealtime } from "@/hooks/useSheetRealtime";
-import { applyDemoCellFormatUpdate, applyDemoCellUpdate } from "@/lib/sheet/demo-engine";
 import { FORMAT_COLOR_PALETTE, createDefaultCellFormat } from "@/lib/sheet/formatting";
 import { getCellEditDecision } from "@/lib/sheet/permissions";
 import type { SheetRealtimeEvent } from "@/lib/sheet/realtime-types";
@@ -132,6 +131,8 @@ interface FormatButtonProps {
   onClick: () => void;
 }
 
+type DemoEngineModule = typeof import("@/lib/sheet/demo-engine");
+
 const CELL_AUTOSAVE_DEBOUNCE_MS = 750;
 const BULK_AUTOSAVE_DEBOUNCE_MS = 150;
 const AUTOSAVE_MAX_BATCH_SIZE = 200;
@@ -144,6 +145,12 @@ const CELL_HORIZONTAL_PADDING_PX = 18;
 const SELECTION_AUTO_SCROLL_EDGE_PX = 56;
 const SELECTION_AUTO_SCROLL_MAX_PX = 28;
 const MAX_CELL_HISTORY_ENTRIES = 100;
+let demoEnginePromise: Promise<DemoEngineModule> | null = null;
+
+function loadDemoEngine(): Promise<DemoEngineModule> {
+  demoEnginePromise ??= import("@/lib/sheet/demo-engine");
+  return demoEnginePromise;
+}
 
 interface SelectionAutoScrollState {
   frameId: number | null;
@@ -1421,6 +1428,8 @@ export function SpreadsheetWorkspace({
     setMessage(`${label}...`);
 
     if (demoMode) {
+      const { applyDemoCellUpdate } = await loadDemoEngine();
+
       for (const update of filteredUpdates) {
         const result = applyDemoCellUpdate(
           nextSnapshot,
@@ -2010,6 +2019,7 @@ export function SpreadsheetWorkspace({
 
     if (demoMode) {
       let nextSnapshot = snapshot;
+      const { applyDemoCellUpdate } = await loadDemoEngine();
 
       for (const update of updates) {
         const result = applyDemoCellUpdate(
@@ -2074,6 +2084,8 @@ export function SpreadsheetWorkspace({
     setMessage("Clearing...");
 
     if (demoMode) {
+      const { applyDemoCellUpdate } = await loadDemoEngine();
+
       for (const update of updates) {
         const result = applyDemoCellUpdate(
           nextSnapshot,
@@ -2175,6 +2187,7 @@ export function SpreadsheetWorkspace({
     setMessage(clear ? "Clearing formatting..." : "Formatting...");
 
     if (demoMode) {
+      const { applyDemoCellFormatUpdate } = await loadDemoEngine();
       const result = applyDemoCellFormatUpdate(snapshot, {
         startRow: normalizedRange.startRow,
         endRow: normalizedRange.endRow,
@@ -2752,6 +2765,8 @@ export function SpreadsheetWorkspace({
     setMessage("Pasting...");
 
     if (demoMode) {
+      const { applyDemoCellUpdate } = await loadDemoEngine();
+
       for (let rowOffset = 0; rowOffset < pastedGrid.length; rowOffset += 1) {
         const rowIndex = startRowIndex + rowOffset;
 
