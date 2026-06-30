@@ -175,6 +175,11 @@ option {
   line-height: 1.35;
 }
 
+.sheet-cell-word {
+  overflow-wrap: anywhere;
+  word-break: normal;
+}
+
 .sheet-range-selecting {
   cursor: cell;
 }

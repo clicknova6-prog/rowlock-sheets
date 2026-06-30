@@ -202,6 +202,28 @@ function getRenderedCellValue(row: SheetGridRow, columnKey: ColumnKey): string {
     : String(row[columnKey] ?? "");
 }
 
+function renderWrappedCellText(value: string): React.ReactNode {
+  if (!value) {
+    return null;
+  }
+
+  return value.split(/(\r\n|\r|\n|\s+)/).map((segment, index) => {
+    if (segment === "\r\n" || segment === "\r" || segment === "\n") {
+      return <br key={index} />;
+    }
+
+    if (/^\s+$/.test(segment)) {
+      return " ";
+    }
+
+    return (
+      <span className="sheet-cell-word" key={index}>
+        {segment}
+      </span>
+    );
+  });
+}
+
 function getSelectionEdgeVelocity(distance: number): number {
   if (distance <= 0) {
     return 0;
@@ -337,18 +359,68 @@ function countEditableColumns(snapshot: SheetSnapshot): number {
   return snapshot.columnPermissions.filter((permission) => permission.editableByMember).length;
 }
 
+function estimateTextSegmentLineCount(
+  segment: string,
+  charactersPerLine: number
+): number {
+  if (!segment) {
+    return 1;
+  }
+
+  const words = segment.split(/(\s+)/);
+  let lineCount = 1;
+  let currentLineLength = 0;
+
+  for (const word of words) {
+    if (!word) {
+      continue;
+    }
+
+    const wordLength = word.length;
+
+    if (/^\s+$/.test(word)) {
+      if (currentLineLength > 0 && currentLineLength + 1 <= charactersPerLine) {
+        currentLineLength += 1;
+      }
+      continue;
+    }
+
+    if (wordLength > charactersPerLine) {
+      const remainingSpace =
+        currentLineLength > 0 ? Math.max(0, charactersPerLine - currentLineLength) : 0;
+      const overflowLength = remainingSpace > 0 ? Math.max(0, wordLength - remainingSpace) : wordLength;
+      const extraLines = Math.ceil(overflowLength / charactersPerLine);
+
+      lineCount += extraLines;
+      currentLineLength = overflowLength % charactersPerLine;
+      continue;
+    }
+
+    if (currentLineLength === 0) {
+      currentLineLength = wordLength;
+    } else if (currentLineLength + 1 + wordLength <= charactersPerLine) {
+      currentLineLength += 1 + wordLength;
+    } else {
+      lineCount += 1;
+      currentLineLength = wordLength;
+    }
+  }
+
+  return lineCount;
+}
+
 function estimateWrappedLineCount(value: string, columnWidth: number, fontSize: number): number {
   if (!value) {
     return 1;
   }
 
   const usableWidth = Math.max(24, columnWidth - CELL_HORIZONTAL_PADDING_PX);
-  const averageCharacterWidth = Math.max(7, fontSize * 0.58);
+  const averageCharacterWidth = Math.max(5, fontSize * 0.52);
   const charactersPerLine = Math.max(1, Math.floor(usableWidth / averageCharacterWidth));
   const lines = value.split(/\r\n|\r|\n/);
 
   return lines.reduce((count, line) => {
-    return count + Math.max(1, Math.ceil(line.length / charactersPerLine));
+    return count + estimateTextSegmentLineCount(line, charactersPerLine);
   }, 0);
 }
 
@@ -3140,6 +3212,7 @@ export function SpreadsheetWorkspace({
           renderCell: ({ row }) => {
             const lock = locks.get(getCellLockMapKey(row.rowNumber, columnKey));
             const lockedByOther = lock && lock.userId !== snapshot.currentUser.id;
+            const renderedValue = getRenderedCellValue(row, columnKey);
 
             return (
               <div
@@ -3159,7 +3232,7 @@ export function SpreadsheetWorkspace({
                     {getUserInitials(lock.userId)}
                   </span>
                 ) : null}
-                {getRenderedCellValue(row, columnKey)}
+                {renderWrappedCellText(renderedValue)}
               </div>
             );
           }
