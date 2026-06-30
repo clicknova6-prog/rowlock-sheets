@@ -7,6 +7,7 @@ import { SESSION_COOKIE, verifySessionToken } from "@/lib/auth/token";
 import { getFirebaseActorByUid } from "@/lib/firebase/users";
 import { assertColumnKey, getCellKey, isValidRowIndex } from "@/lib/constants";
 import { prisma } from "@/lib/db";
+import { getRowsForPersistedCellUpdates } from "@/lib/sheet/row-payloads";
 import { SheetRuleError, bulkUpdateCells, claimRowForEdit } from "@/lib/sheet/service";
 import type {
   CellBlurPayload,
@@ -288,7 +289,13 @@ async function flushPendingCellWriteBuffer(
       sheetId,
       updates,
       userId: actor.id,
-      rows: snapshot.rows,
+      rows: getRowsForPersistedCellUpdates(
+        snapshot,
+        updates.map((update) => ({
+          rowIndex: update.row,
+          columnKey: update.col
+        }))
+      ),
       persisted: true
     });
   } catch (error) {
@@ -653,7 +660,7 @@ async function claimRowFromSocket(
     row: input.row,
     col: input.col,
     userId: socket.data.user.id,
-    rows: snapshot.rows
+    rows: snapshot.rows.filter((row) => row.rowNumber === input.row)
   });
 }
 

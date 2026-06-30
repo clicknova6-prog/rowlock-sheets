@@ -236,5 +236,6 @@ model AuditLog {
   actor User? @relation("AuditActor", fields: [actorId], references: [id], onDelete: SetNull)
 
   @@index([sheetId, createdAt])
+  @@index([sheetId, rowIndex, columnKey, createdAt])
   @@index([actorId])
 }

@@ -3,6 +3,7 @@ import { z } from "zod";
 import { getCurrentUser } from "@/lib/auth/session";
 import { assertColumnKey } from "@/lib/constants";
 import { publishSheetRealtimeEvent } from "@/lib/firebase/sheet-realtime";
+import { getRowsForPersistedCellUpdates } from "@/lib/sheet/row-payloads";
 import { SheetRuleError, bulkUpdateCells, updateCell } from "@/lib/sheet/service";
 
 const sourceClientIdSchema = z.string().min(1).max(128).optional();
@@ -43,39 +44,51 @@ export async function POST(request: Request): Promise<NextResponse> {
     if ("updates" in body) {
       const payload = bulkUpdateSchema.parse(body);
       const snapshot = await bulkUpdateCells(user, payload);
+      const updateReferences = payload.updates.map((update) => ({
+        rowIndex: update.rowIndex,
+        columnKey: assertColumnKey(update.columnKey)
+      }));
+      const rows = getRowsForPersistedCellUpdates(snapshot, updateReferences);
 
       await publishSheetRealtimeEvent({
         type: "cells-changed",
         sheetId: payload.sheetId,
         actor: user,
         snapshot,
-        rowIndexes: payload.updates.map((update) => update.rowIndex),
+        rowIndexes: rows.map((row) => row.rowNumber),
         cellCount: payload.updates.length,
-        updates: payload.updates.map((update) => ({
+        updates: updateReferences.map((update) => ({
           row: update.rowIndex,
-          col: assertColumnKey(update.columnKey)
+          col: update.columnKey
         })),
         sourceClientId: payload.sourceClientId
       });
 
-      return NextResponse.json({ snapshot });
+      return NextResponse.json({ rows });
     }
 
     const payload = updateCellSchema.parse(body);
+    const columnKey = assertColumnKey(payload.columnKey);
     const snapshot = await updateCell(user, payload);
+    const rows = getRowsForPersistedCellUpdates(snapshot, [
+      {
+        rowIndex: payload.rowIndex,
+        columnKey
+      }
+    ]);
 
     await publishSheetRealtimeEvent({
       type: "cells-changed",
       sheetId: payload.sheetId,
       actor: user,
       snapshot,
-      rowIndexes: [payload.rowIndex],
+      rowIndexes: rows.map((row) => row.rowNumber),
       cellCount: 1,
-      updates: [{ row: payload.rowIndex, col: assertColumnKey(payload.columnKey) }],
+      updates: [{ row: payload.rowIndex, col: columnKey }],
       sourceClientId: payload.sourceClientId
     });
 
-    return NextResponse.json({ snapshot });
+    return NextResponse.json({ rows });
   } catch (error) {
     if (error instanceof SheetRuleError) {
       return NextResponse.json({ error: error.message }, { status: error.status });

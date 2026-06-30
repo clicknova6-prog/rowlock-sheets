@@ -1154,6 +1154,32 @@ export function SpreadsheetWorkspace({
     rowsRef.current = nextRows;
   }, []);
 
+  const applyCommittedRows = useCallback((incomingRows: SheetGridRow[]): void => {
+    const currentSnapshot = latestSnapshotRef.current;
+    const mergedRows =
+      incomingRows.length === currentSnapshot.rows.length
+        ? incomingRows
+        : mergeRowsByNumber(currentSnapshot.rows, incomingRows);
+    const committedRows = recomputeRowsForCurrentUser(mergedRows, currentSnapshot);
+    const committedSnapshot = {
+      ...currentSnapshot,
+      rows: committedRows
+    };
+    const optimisticUpdates = [
+      ...inFlightUpdatesRef.current.values(),
+      ...saveQueueRef.current.values()
+    ];
+    const visibleRows =
+      optimisticUpdates.length > 0
+        ? applyUpdatesToRows(committedRows, optimisticUpdates)
+        : committedRows;
+
+    latestSnapshotRef.current = committedSnapshot;
+    setSnapshot(committedSnapshot);
+    setRows(visibleRows);
+    rowsRef.current = visibleRows;
+  }, []);
+
   const scheduleQueuedSave = useCallback((delayMs = CELL_AUTOSAVE_DEBOUNCE_MS): void => {
     clearAutosaveTimer();
     autosaveTimerRef.current = setTimeout(() => {
@@ -1226,16 +1252,21 @@ export function SpreadsheetWorkspace({
         });
         const body = (await response.json().catch(() => null)) as {
           snapshot?: SheetSnapshot;
+          rows?: SheetGridRow[];
           error?: string;
         } | null;
 
-        if (!response.ok || !body?.snapshot) {
+        if (!response.ok || (!body?.snapshot && !body?.rows)) {
           throw new Error(body?.error ?? "Unable to save queued changes.");
         }
 
         saveInFlightRef.current = false;
         setIsSavingCells(false);
-        applyServerSnapshot(body.snapshot);
+        if (body.snapshot) {
+          applyServerSnapshot(body.snapshot);
+        } else if (body.rows) {
+          applyCommittedRows(body.rows);
+        }
         setPendingSaveCount(saveQueueRef.current.size);
         setMessage(
           `${updates.length} cell${updates.length === 1 ? "" : "s"} saved${
@@ -1297,7 +1328,14 @@ export function SpreadsheetWorkspace({
     );
     scheduleInFlightTimeout();
     return true;
-  }, [applyServerSnapshot, clearAutosaveTimer, demoMode, scheduleInFlightTimeout, scheduleQueuedSave]);
+  }, [
+    applyCommittedRows,
+    applyServerSnapshot,
+    clearAutosaveTimer,
+    demoMode,
+    scheduleInFlightTimeout,
+    scheduleQueuedSave
+  ]);
 
   useEffect(() => {
     flushQueuedCellUpdatesRef.current = flushQueuedCellUpdates;
@@ -1485,30 +1523,8 @@ export function SpreadsheetWorkspace({
   }, [stopSelectionAutoScroll]);
 
   const applySocketRows = useCallback((incomingRows: SheetGridRow[]): void => {
-    const currentSnapshot = latestSnapshotRef.current;
-    const mergedRows =
-      incomingRows.length === currentSnapshot.rows.length
-        ? incomingRows
-        : mergeRowsByNumber(currentSnapshot.rows, incomingRows);
-    const committedRows = recomputeRowsForCurrentUser(mergedRows, currentSnapshot);
-    const committedSnapshot = {
-      ...currentSnapshot,
-      rows: committedRows
-    };
-    const optimisticUpdates = [
-      ...inFlightUpdatesRef.current.values(),
-      ...saveQueueRef.current.values()
-    ];
-    const visibleRows =
-      optimisticUpdates.length > 0
-        ? applyUpdatesToRows(committedRows, optimisticUpdates)
-        : committedRows;
-
-    latestSnapshotRef.current = committedSnapshot;
-    setSnapshot(committedSnapshot);
-    setRows(visibleRows);
-    rowsRef.current = visibleRows;
-  }, []);
+    applyCommittedRows(incomingRows);
+  }, [applyCommittedRows]);
 
   const finishInFlightUpdate = useCallback((rowIndex: number, columnKey: ColumnKey): void => {
     inFlightUpdatesRef.current.delete(getCellKey(rowIndex, columnKey));

@@ -28,7 +28,7 @@ import type {
 } from "./types";
 
 const DETAILED_BULK_AUDIT_LIMIT = 100;
-const BULK_SQL_WRITE_CHUNK_SIZE = 50;
+const BULK_SQL_WRITE_CHUNK_SIZE = 200;
 const BULK_AUDIT_CELL_REFERENCE_LIMIT = 500;
 
 export class SheetRuleError extends Error {
@@ -839,17 +839,17 @@ export async function bulkUpdateCells(
         };
       })
     });
+  } else {
+    await prisma.auditLog.create({
+      data: {
+        sheetId: input.sheetId,
+        actorId: actor.id,
+        action: AuditAction.CELL_UPDATED,
+        message: `${actor.name} pasted ${editedCells.length} cells.`,
+        metadata: getBulkAuditMetadata(editedCells)
+      }
+    });
   }
-
-  await prisma.auditLog.create({
-    data: {
-      sheetId: input.sheetId,
-      actorId: actor.id,
-      action: AuditAction.CELL_UPDATED,
-      message: `${actor.name} pasted ${editedCells.length} cells.`,
-      metadata: getBulkAuditMetadata(editedCells)
-    }
-  });
 
   return getSheetSnapshot(input.sheetId, actor);
 }

@@ -1,10 +1,17 @@
 import { describe, expect, it } from "vitest";
 import { Role, RuleOperator } from "@/generated/prisma/enums";
 import { getCellEditDecision } from "@/lib/sheet/permissions";
+import { getRowsForPersistedCellUpdates } from "@/lib/sheet/row-payloads";
 import { evaluateConditionalRules } from "@/lib/sheet/rules";
 import { recalculateCells, mergeRecalculatedCells } from "@/lib/sheet/formulas";
 import { validateAllowedValue } from "@/lib/sheet/validation";
-import type { CellState, ColumnPermissionState, ConditionalRuleState } from "@/lib/sheet/types";
+import type {
+  CellState,
+  ColumnPermissionState,
+  ConditionalRuleState,
+  SheetGridRow,
+  SheetSnapshot
+} from "@/lib/sheet/types";
 
 const permissions: ColumnPermissionState[] = [
   {
@@ -259,5 +266,80 @@ describe("formula recalculation", () => {
 
     expect(sumCell?.computedValue).toBe("60");
     expect(arithmeticCell?.computedValue).toBe("50");
+  });
+});
+
+describe("persisted row payloads", () => {
+  function makePayloadRow(rowNumber: number, formulaColumns: string[] = []): SheetGridRow {
+    return {
+      rowNumber,
+      __formula: {
+        A: formulaColumns.includes("A"),
+        B: formulaColumns.includes("B")
+      }
+    } as SheetGridRow;
+  }
+
+  function makePayloadSnapshot(
+    rows: SheetGridRow[],
+    duplicateHighlight = false
+  ): SheetSnapshot {
+    return {
+      columns: ["A", "B"],
+      rows,
+      columnPermissions: [
+        {
+          columnKey: "A",
+          editableByMember: true,
+          claimRowOnEdit: false,
+          memberWriteOnce: false,
+          duplicateHighlight,
+          matchHighlightTerms: []
+        },
+        {
+          columnKey: "B",
+          editableByMember: true,
+          claimRowOnEdit: false,
+          memberWriteOnce: false,
+          duplicateHighlight: false,
+          matchHighlightTerms: []
+        }
+      ]
+    } as unknown as SheetSnapshot;
+  }
+
+  it("sends only touched rows for ordinary persisted edits", () => {
+    const snapshot = makePayloadSnapshot([
+      makePayloadRow(1),
+      makePayloadRow(2),
+      makePayloadRow(3)
+    ]);
+
+    const rows = getRowsForPersistedCellUpdates(snapshot, [{ rowIndex: 2, columnKey: "A" }]);
+
+    expect(rows.map((row) => row.rowNumber)).toEqual([2]);
+  });
+
+  it("includes formula rows because their computed values may change", () => {
+    const snapshot = makePayloadSnapshot([
+      makePayloadRow(1),
+      makePayloadRow(2, ["B"]),
+      makePayloadRow(3)
+    ]);
+
+    const rows = getRowsForPersistedCellUpdates(snapshot, [{ rowIndex: 1, columnKey: "A" }]);
+
+    expect(rows.map((row) => row.rowNumber)).toEqual([1, 2]);
+  });
+
+  it("sends the full sheet when duplicate highlighting may change other rows", () => {
+    const snapshot = makePayloadSnapshot(
+      [makePayloadRow(1), makePayloadRow(2), makePayloadRow(3)],
+      true
+    );
+
+    const rows = getRowsForPersistedCellUpdates(snapshot, [{ rowIndex: 1, columnKey: "A" }]);
+
+    expect(rows).toHaveLength(3);
   });
 });

@@ -38,9 +38,9 @@ interface UseSheetPresenceResult {
   users: SheetPresenceUser[];
 }
 
-const HEARTBEAT_INTERVAL_MS = 30_000;
-const ACTIVE_WINDOW_MS = 75_000;
-const PRESENCE_CLOCK_TICK_MS = 5_000;
+const HEARTBEAT_INTERVAL_MS = 45_000;
+const ACTIVE_WINDOW_MS = 120_000;
+const PRESENCE_CLOCK_TICK_MS = 10_000;
 const PRESENCE_LIST_LIMIT = 120;
 const PRESENCE_COLORS = [
   "#0f766e",
