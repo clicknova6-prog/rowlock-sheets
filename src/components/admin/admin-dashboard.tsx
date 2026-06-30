@@ -110,30 +110,40 @@ function Section({
   title,
   description,
   icon,
-  children
+  children,
+  defaultOpen = false
 }: {
   title: string;
   description?: string;
   icon: React.ReactNode;
   children: React.ReactNode;
+  defaultOpen?: boolean;
 }) {
   return (
-    <section className="rounded-lg border border-[color:var(--line)] bg-[color:var(--panel)] p-4 shadow-sm">
-      <div className="mb-4 flex items-start gap-3">
-        <span className="inline-flex h-9 w-9 items-center justify-center rounded-md bg-[color:var(--panel-muted)] text-[color:var(--accent)]">
-          {icon}
+    <details
+      className="group rounded-lg border border-[color:var(--line)] bg-[color:var(--panel)] shadow-sm transition open:border-[color:var(--accent)]"
+      open={defaultOpen}
+    >
+      <summary className="flex cursor-pointer list-none items-start justify-between gap-3 p-4 [&::-webkit-details-marker]:hidden">
+        <span className="flex min-w-0 items-start gap-3">
+          <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-[color:var(--panel-muted)] text-[color:var(--accent)]">
+            {icon}
+          </span>
+          <span className="min-w-0">
+            <span className="block text-base font-semibold">{title}</span>
+            {description ? (
+              <span className="mt-1 block text-sm leading-5 text-[color:var(--text-muted)]">
+                {description}
+              </span>
+            ) : null}
+          </span>
         </span>
-        <div className="min-w-0">
-          <h2 className="text-base font-semibold">{title}</h2>
-          {description ? (
-            <p className="mt-1 text-sm leading-5 text-[color:var(--text-muted)]">
-              {description}
-            </p>
-          ) : null}
-        </div>
-      </div>
-      {children}
-    </section>
+        <span className="inline-flex h-9 w-9 items-center justify-center rounded-md bg-[color:var(--panel-muted)] text-[color:var(--accent)]">
+          <span className="text-lg leading-none transition group-open:rotate-45">+</span>
+        </span>
+      </summary>
+      <div className="border-t border-[color:var(--line)] p-4">{children}</div>
+    </details>
   );
 }
 
@@ -308,7 +318,7 @@ function ConditionalRuleForm({
         <label>
           <FieldLabel>Allowed matches</FieldLabel>
           <TextInput
-            defaultValue={rule?.limitCount ?? 3}
+            defaultValue={rule?.limitCount ?? 1}
             min={1}
             name="limitCount"
             type="number"
@@ -360,6 +370,9 @@ export function AdminDashboard({
           <div>
             <h1 className="text-lg font-semibold">Admin Dashboard</h1>
             <p className="mt-1 text-sm text-[color:var(--text-muted)]">{snapshot.sheet.name}</p>
+            <p className="mt-2 text-sm text-[color:var(--text-muted)]">
+              Open a setting below, edit it, then save that section.
+            </p>
           </div>
           <div className="grid grid-cols-2 gap-2 text-sm sm:grid-cols-4">
             <div className="rounded-md border border-[color:var(--line)] px-3 py-2">
@@ -467,7 +480,7 @@ export function AdminDashboard({
           </Section>
 
           <Section
-            description="Restrict member entries in a selected column to approved names or values. Admins can still correct data."
+            description="Restrict member entries to approved values. Saving a list also creates editable one-match count rules for missing values."
             icon={<ClipboardList size={18} />}
             title="Allowed Values"
           >
@@ -566,7 +579,7 @@ export function AdminDashboard({
           </Section>
 
           <Section
-            description="Create count limits for cases that match multiple columns. For different names with different counts, create one rule per limit."
+            description="Limit how many rows can match a value or group of conditions. Default rules from Allowed Values start at 1 match and can be edited here."
             icon={<ClipboardList size={18} />}
             title="Conditional Count Rules"
           >

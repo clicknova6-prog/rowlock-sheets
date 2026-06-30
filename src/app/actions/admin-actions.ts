@@ -65,6 +65,20 @@ function validatePassword(password: string): string | null {
   return null;
 }
 
+function uniqueTrimmedValues(values: string[]): string[] {
+  const valueLookup = new Map<string, string>();
+
+  for (const value of values) {
+    const trimmed = value.trim();
+
+    if (trimmed) {
+      valueLookup.set(trimmed.toLowerCase(), trimmed);
+    }
+  }
+
+  return [...valueLookup.values()];
+}
+
 async function auditAdminChange(
   sheetId: string,
   actorId: string,
@@ -292,30 +306,87 @@ export async function saveValidationRuleAction(formData: FormData): Promise<void
   const id = getString(formData, "id");
   const columnKey = assertColumnKey(getString(formData, "columnKey"));
   const name = getString(formData, "name") || `Allowed values for ${columnKey}`;
-  const allowedValues = parseAllowedValues(getString(formData, "allowedValues"));
+  const allowedValues = uniqueTrimmedValues(parseAllowedValues(getString(formData, "allowedValues")));
   const enabled = formData.has("enabled");
 
   if (allowedValues.length === 0) {
     return;
   }
 
-  if (id) {
-    await prisma.validationRule.update({
-      where: { id },
-      data: { columnKey, name, allowedValues, enabled }
-    });
-  } else {
-    await prisma.validationRule.create({
-      data: { sheetId, columnKey, name, allowedValues, enabled }
-    });
-  }
+  await prisma.$transaction(async (tx) => {
+    if (id) {
+      await tx.validationRule.update({
+        where: { id },
+        data: { columnKey, name, allowedValues, enabled }
+      });
+    } else {
+      await tx.validationRule.create({
+        data: { sheetId, columnKey, name, allowedValues, enabled }
+      });
+    }
 
-  await auditAdminChange(
-    sheetId,
-    actor.id,
-    AuditAction.VALIDATION_RULE_UPDATED,
-    `${actor.name} saved validation rule "${name}".`
-  );
+    const existingRules = await tx.conditionalRule.findMany({
+      where: { sheetId },
+      include: { conditions: true }
+    });
+    const existingSingleValueLimits = new Set<string>();
+
+    for (const rule of existingRules) {
+      for (const condition of rule.conditions) {
+        if (condition.columnKey !== columnKey || !Array.isArray(condition.values)) {
+          continue;
+        }
+
+        const conditionValues = uniqueTrimmedValues(
+          condition.values.map((value) => String(value))
+        );
+
+        if (conditionValues.length === 1) {
+          existingSingleValueLimits.add(conditionValues[0].toLowerCase());
+        }
+      }
+    }
+
+    const missingValues = allowedValues.filter(
+      (value) => !existingSingleValueLimits.has(value.toLowerCase())
+    );
+
+    for (const value of missingValues) {
+      await tx.conditionalRule.create({
+        data: {
+          sheetId,
+          name: `${columnKey}: ${value}`,
+          description: `Default one-match limit for ${value}.`,
+          limitCount: 1,
+          enabled,
+          conditions: {
+            create: [
+              {
+                columnKey,
+                operator: RuleOperator.EQUALS,
+                values: [value]
+              }
+            ]
+          }
+        }
+      });
+    }
+
+    await tx.auditLog.create({
+      data: {
+        sheetId,
+        actorId: actor.id,
+        action: AuditAction.VALIDATION_RULE_UPDATED,
+        message: `${actor.name} saved validation rule "${name}"${
+          missingValues.length > 0
+            ? ` and created ${missingValues.length} default count rule${
+                missingValues.length === 1 ? "" : "s"
+              }.`
+            : "."
+        }`
+      }
+    });
+  });
 
   refreshApp();
 }
