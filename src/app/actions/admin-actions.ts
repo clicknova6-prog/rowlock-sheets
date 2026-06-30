@@ -454,3 +454,29 @@ export async function unlockRowAction(formData: FormData): Promise<void> {
   await unlockRow(actor, sheetId, rowIndex);
   refreshApp();
 }
+
+export async function deleteOldAuditHistoryAction(formData: FormData): Promise<void> {
+  const actor = await requireAdmin();
+  const sheetId = getString(formData, "sheetId");
+  const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000);
+
+  const result = await prisma.auditLog.deleteMany({
+    where: {
+      sheetId,
+      createdAt: { lt: cutoff }
+    }
+  });
+
+  await prisma.auditLog.create({
+    data: {
+      sheetId,
+      actorId: actor.id,
+      action: AuditAction.AUDIT_HISTORY_CLEANED,
+      message: `${actor.name} deleted ${result.count} audit entr${
+        result.count === 1 ? "y" : "ies"
+      } older than 1 day.`
+    }
+  });
+
+  refreshApp();
+}

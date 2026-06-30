@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import {
   deleteConditionalRuleAction,
+  deleteOldAuditHistoryAction,
   deleteValidationRuleAction,
   saveColumnPermissionsAction,
   saveConditionalRuleAction,
@@ -664,7 +665,18 @@ export function AdminDashboard({
             </div>
           </Section>
 
-          <Section icon={<ClipboardList size={18} />} title="Audit History">
+          <Section
+            description="Keep only recent history when the table gets large."
+            icon={<ClipboardList size={18} />}
+            title="Audit History"
+          >
+            <form action={deleteOldAuditHistoryAction} className="mb-4 flex justify-end">
+              <input name="sheetId" type="hidden" value={snapshot.sheet.id} />
+              <ActionButton variant="danger">
+                <Trash2 size={16} />
+                Delete older than 1 day
+              </ActionButton>
+            </form>
             <div className="space-y-2">
               {snapshot.auditLogs.map((log) => (
                 <div className="rounded-md border border-[color:var(--line)] p-3 text-sm" key={log.id}>
