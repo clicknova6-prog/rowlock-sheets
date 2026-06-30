@@ -33,6 +33,10 @@ function stringArrayFromJson(value: unknown): string[] {
     .filter(Boolean);
 }
 
+function normalizeMatchTerm(value: string): string {
+  return value.trim().toLowerCase();
+}
+
 export function mapValidationRule(rule: {
   id: string;
   columnKey: string;
@@ -137,6 +141,40 @@ function getDuplicateHighlightedRows(
   return highlightedRows;
 }
 
+function getMatchHighlightedRows(
+  cellLookup: Map<string, CellState>,
+  permissions: ColumnPermissionState[]
+): Set<number> {
+  const highlightedRows = new Set<number>();
+  const matchRules = permissions
+    .map((permission) => ({
+      columnKey: permission.columnKey,
+      terms: new Set(permission.matchHighlightTerms.map(normalizeMatchTerm).filter(Boolean))
+    }))
+    .filter((rule) => rule.terms.size > 0);
+
+  for (const rule of matchRules) {
+    for (let rowIndex = 1; rowIndex <= MAX_ROWS; rowIndex += 1) {
+      const cell = cellLookup.get(getCellKey(rowIndex, rule.columnKey));
+      const value = normalizeMatchTerm(cell?.computedValue ?? cell?.value ?? "");
+
+      if (!value) {
+        continue;
+      }
+
+      const valueWords = value.split(/\s+/).filter(Boolean);
+      const matches =
+        rule.terms.has(value) || valueWords.some((word) => rule.terms.has(word));
+
+      if (matches) {
+        highlightedRows.add(rowIndex);
+      }
+    }
+  }
+
+  return highlightedRows;
+}
+
 export async function getDefaultSheetId(): Promise<string | null> {
   const sheet = await prisma.sheet.findFirst({
     orderBy: { createdAt: "asc" },
@@ -183,7 +221,8 @@ export async function getSheetSnapshot(
         editableByMember: true,
         claimRowOnEdit: true,
         memberWriteOnce: true,
-        duplicateHighlight: true
+        duplicateHighlight: true,
+        matchHighlightTerms: true
       }
     }),
     prisma.rowOwnership.findMany({
@@ -240,7 +279,8 @@ export async function getSheetSnapshot(
       editableByMember: permission?.editableByMember ?? false,
       claimRowOnEdit: permission?.claimRowOnEdit ?? false,
       memberWriteOnce: permission?.memberWriteOnce ?? false,
-      duplicateHighlight: permission?.duplicateHighlight ?? false
+      duplicateHighlight: permission?.duplicateHighlight ?? false,
+      matchHighlightTerms: stringArrayFromJson(permission?.matchHighlightTerms)
     };
   });
 
@@ -282,6 +322,7 @@ export async function getSheetSnapshot(
   }
 
   const duplicateHighlightedRows = getDuplicateHighlightedRows(cellLookup, permissions);
+  const matchHighlightedRows = getMatchHighlightedRows(cellLookup, permissions);
 
   const sheetRowLookup = new Map(
     sheetRows.map((row) => [
@@ -339,6 +380,7 @@ export async function getSheetSnapshot(
       __lockReason: lockReason,
       __format: format,
       __duplicateHighlight: duplicateHighlightedRows.has(rowIndex),
+      __matchHighlight: matchHighlightedRows.has(rowIndex),
       ...values
     });
   }

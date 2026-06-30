@@ -23,6 +23,8 @@
   --grid-alt-even-bg: #f8fafc;
   --grid-duplicate-bg: #fef08a;
   --grid-duplicate-text: #111827;
+  --grid-match-bg: #fecaca;
+  --grid-match-text: #7f1d1d;
   --grid-fill-red-bg: #fee2e2;
   --grid-fill-orange-bg: #ffedd5;
   --grid-fill-yellow-bg: #fef3c7;
@@ -60,6 +62,8 @@
   --grid-alt-even-bg: #172033;
   --grid-duplicate-bg: #713f12;
   --grid-duplicate-text: #fef3c7;
+  --grid-match-bg: #7f1d1d;
+  --grid-match-text: #fee2e2;
   --grid-fill-red-bg: #4c1d1d;
   --grid-fill-orange-bg: #4a2508;
   --grid-fill-yellow-bg: #422006;
@@ -156,7 +160,7 @@ option {
   display: flex;
   align-items: flex-start;
   min-width: 0;
-  padding-block: 4px;
+  padding-block: max(4px, calc(var(--sheet-font-size, 14px) * 0.28));
   font-size: var(--sheet-font-size, inherit);
 }
 

@@ -145,13 +145,15 @@ function PermissionTile({
   editableByMember,
   claimRowOnEdit,
   memberWriteOnce,
-  duplicateHighlight
+  duplicateHighlight,
+  matchHighlightTerms
 }: {
   columnKey: string;
   editableByMember: boolean;
   claimRowOnEdit: boolean;
   memberWriteOnce: boolean;
   duplicateHighlight: boolean;
+  matchHighlightTerms: string[];
 }) {
   return (
     <div
@@ -160,6 +162,11 @@ function PermissionTile({
     >
       <span className="flex items-center justify-between gap-2">
         <span className="font-mono text-lg font-semibold">{columnKey}</span>
+        <input
+          name={`matchHighlightTerms-${columnKey}`}
+          type="hidden"
+          value={JSON.stringify(matchHighlightTerms)}
+        />
         <label className="inline-flex items-center gap-2">
           <input
             className="h-4 w-4 accent-[color:var(--accent)]"
@@ -207,6 +214,11 @@ function PermissionTile({
           />
           Yellow duplicates
         </span>
+        {matchHighlightTerms.length > 0 ? (
+          <span className="text-[11px] text-red-700 dark:text-red-200">
+            {matchHighlightTerms.length} red checks
+          </span>
+        ) : null}
       </span>
     </div>
   );
@@ -386,6 +398,7 @@ export function AdminDashboard({
                     duplicateHighlight={permission.duplicateHighlight}
                     editableByMember={permission.editableByMember}
                     key={permission.columnKey}
+                    matchHighlightTerms={permission.matchHighlightTerms}
                     memberWriteOnce={permission.memberWriteOnce}
                   />
                 ))}

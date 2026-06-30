@@ -24,6 +24,7 @@ export interface ColumnPermissionState {
   claimRowOnEdit: boolean;
   memberWriteOnce: boolean;
   duplicateHighlight: boolean;
+  matchHighlightTerms: string[];
 }
 
 export interface RowOwnershipState {
@@ -109,6 +110,7 @@ export interface SheetGridRow {
   __lockReason: Record<ColumnKey, string | null>;
   __format: Record<ColumnKey, CellFormatState>;
   __duplicateHighlight: boolean;
+  __matchHighlight: boolean;
   A: string;
   B: string;
   C: string;

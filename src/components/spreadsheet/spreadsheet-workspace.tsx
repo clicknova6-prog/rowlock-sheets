@@ -37,6 +37,7 @@ import {
   Row,
   type CellRendererProps,
   type Column,
+  type ColumnWidths,
   type DataGridHandle,
   type FillEvent,
   type RenderRowProps,
@@ -109,6 +110,11 @@ interface CellHistoryPanelState {
   error: string | null;
 }
 
+interface ColumnCheckDialogState {
+  columnKey: ColumnKey;
+  text: string;
+}
+
 interface CellEditHistoryEntry {
   undo: CellUpdateDraft[];
   redo: CellUpdateDraft[];
@@ -133,6 +139,8 @@ const SOCKET_BULK_UPDATE_LIMIT = 1000;
 const REST_BULK_UPDATE_LIMIT = 200;
 const LIVE_SYNC_ACK_TIMEOUT_MS = 300000;
 const REALTIME_SNAPSHOT_REFRESH_MS = 400;
+const DEFAULT_DATA_COLUMN_WIDTH = 230;
+const CELL_HORIZONTAL_PADDING_PX = 18;
 const SELECTION_AUTO_SCROLL_EDGE_PX = 56;
 const SELECTION_AUTO_SCROLL_MAX_PX = 28;
 const MAX_CELL_HISTORY_ENTRIES = 100;
@@ -322,25 +330,32 @@ function countEditableColumns(snapshot: SheetSnapshot): number {
   return snapshot.columnPermissions.filter((permission) => permission.editableByMember).length;
 }
 
-function estimateWrappedLineCount(value: string): number {
+function estimateWrappedLineCount(value: string, columnWidth: number, fontSize: number): number {
   if (!value) {
     return 1;
   }
 
+  const usableWidth = Math.max(24, columnWidth - CELL_HORIZONTAL_PADDING_PX);
+  const averageCharacterWidth = Math.max(7, fontSize * 0.58);
+  const charactersPerLine = Math.max(1, Math.floor(usableWidth / averageCharacterWidth));
   const lines = value.split(/\r\n|\r|\n/);
+
   return lines.reduce((count, line) => {
-    return count + Math.max(1, Math.ceil(line.length / 34));
+    return count + Math.max(1, Math.ceil(line.length / charactersPerLine));
   }, 0);
 }
 
 function getResponsiveRowHeight(
   row: SheetGridRow,
   columns: ColumnKey[],
-  fontSize: number
+  fontSize: number,
+  columnWidths: ColumnWidths
 ): number {
   const maxLines = columns.reduce((lineCount, columnKey) => {
     const cellValue = getRenderedCellValue(row, columnKey);
-    return Math.max(lineCount, estimateWrappedLineCount(cellValue));
+    const columnWidth = columnWidths.get(columnKey)?.width ?? DEFAULT_DATA_COLUMN_WIDTH;
+
+    return Math.max(lineCount, estimateWrappedLineCount(cellValue, columnWidth, fontSize));
   }, 1);
   const lineHeight = Math.max(14, fontSize * 1.35);
   const minimumHeight = Math.max(34, fontSize * 2.4);
@@ -355,6 +370,24 @@ function parseClipboardGrid(text: string): string[][] {
     .split("\n")
     .filter((line, index, lines) => line.length > 0 || index < lines.length - 1)
     .map((line) => line.split("\t"));
+}
+
+function parseColumnCheckTerms(text: string): string[] {
+  const terms = new Set<string>();
+
+  for (const value of text.split(/\s+/)) {
+    const term = value.trim();
+
+    if (term) {
+      terms.add(term);
+    }
+
+    if (terms.size >= 500) {
+      break;
+    }
+  }
+
+  return [...terms];
 }
 
 function getNormalizedCellRange(
@@ -633,6 +666,10 @@ function getCellTextStyle(format: CellFormatState): CSSProperties | undefined {
 }
 
 function getReadableTextColorForBackground(backgroundColor: string | undefined): string | undefined {
+  if (backgroundColor === "var(--grid-match-bg)") {
+    return "var(--grid-match-text)";
+  }
+
   if (backgroundColor === "var(--grid-duplicate-bg)") {
     return "var(--grid-duplicate-text)";
   }
@@ -725,6 +762,10 @@ function getAlternateRowBackground(
   row: SheetGridRow,
   viewSetting: SheetViewSettingState
 ): string | undefined {
+  if (row.__matchHighlight) {
+    return "var(--grid-match-bg)";
+  }
+
   if (row.__duplicateHighlight) {
     return "var(--grid-duplicate-bg)";
   }
@@ -862,12 +903,15 @@ export function SpreadsheetWorkspace({
 }: SpreadsheetWorkspaceProps) {
   const [snapshot, setSnapshot] = useState(initialSnapshot);
   const [rows, setRows] = useState(initialSnapshot.rows);
+  const [columnWidths, setColumnWidths] = useState<ColumnWidths>(() => new Map());
   const [selectedCell, setSelectedCell] = useState<SelectedCell | null>(null);
   const [selectedRange, setSelectedRange] = useState<SelectedCellRange | null>(null);
   const [isRangeSelecting, setIsRangeSelecting] = useState(false);
   const [fillColor, setFillColor] = useState("#fef3c7");
   const [textColor, setTextColor] = useState("#111827");
   const [historyPanel, setHistoryPanel] = useState<CellHistoryPanelState | null>(null);
+  const [columnCheckDialog, setColumnCheckDialog] =
+    useState<ColumnCheckDialogState | null>(null);
   const [locks, setLocks] = useState<Map<string, CellLockState>>(new Map());
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -968,8 +1012,8 @@ export function SpreadsheetWorkspace({
         : "Ready");
   const rowHeight = useCallback(
     (row: SheetGridRow) =>
-      getResponsiveRowHeight(row, snapshot.columns, snapshot.viewSetting.fontSize),
-    [snapshot.columns, snapshot.viewSetting.fontSize]
+      getResponsiveRowHeight(row, snapshot.columns, snapshot.viewSetting.fontSize, columnWidths),
+    [columnWidths, snapshot.columns, snapshot.viewSetting.fontSize]
   );
   const getGridScrollElement = useCallback((): HTMLElement | null => {
     return dataGridRef.current?.element ?? gridShellRef.current?.querySelector<HTMLElement>(".rdg") ?? null;
@@ -2174,7 +2218,7 @@ export function SpreadsheetWorkspace({
     patch: Partial<
       Pick<
         NonNullable<typeof selectedColumnPermission>,
-        "claimRowOnEdit" | "duplicateHighlight" | "memberWriteOnce"
+        "claimRowOnEdit" | "duplicateHighlight" | "matchHighlightTerms" | "memberWriteOnce"
       >
     >
   ): Promise<void> => {
@@ -2204,6 +2248,8 @@ export function SpreadsheetWorkspace({
         memberWriteOnce: patch.memberWriteOnce ?? selectedColumnPermission.memberWriteOnce,
         duplicateHighlight:
           patch.duplicateHighlight ?? selectedColumnPermission.duplicateHighlight,
+        matchHighlightTerms:
+          patch.matchHighlightTerms ?? selectedColumnPermission.matchHighlightTerms,
         sourceClientId: clientInstanceIdRef.current
       })
     });
@@ -3027,7 +3073,7 @@ export function SpreadsheetWorkspace({
         (columnKey): Column<SheetGridRow> => ({
           key: columnKey,
           name: columnKey,
-          width: 230,
+          width: DEFAULT_DATA_COLUMN_WIDTH,
           minWidth: 1,
           resizable: true,
           editable: (row: SheetGridRow) =>
@@ -3250,6 +3296,24 @@ export function SpreadsheetWorkspace({
               Duplicate {selectedAdminColumnKey ?? "--"}
             </ToolbarTextButton>
             <ToolbarTextButton
+              active={Boolean(selectedColumnPermission?.matchHighlightTerms.length)}
+              disabled={!selectedColumnPermission}
+              title="Check selected column values against pasted terms"
+              onClick={() => {
+                if (!selectedAdminColumnKey || !selectedColumnPermission) {
+                  return;
+                }
+
+                setColumnCheckDialog({
+                  columnKey: selectedAdminColumnKey,
+                  text: selectedColumnPermission.matchHighlightTerms.join("\n")
+                });
+              }}
+            >
+              <PaintBucket size={14} />
+              Check column {selectedAdminColumnKey ?? "--"}
+            </ToolbarTextButton>
+            <ToolbarTextButton
               active={Boolean(selectedColumnPermission?.claimRowOnEdit)}
               disabled={!selectedColumnPermission}
               title="Members who save a valid value in this selected column will own that row"
@@ -3418,6 +3482,7 @@ export function SpreadsheetWorkspace({
           ref={dataGridRef}
           className={clsx("fill-grid", isRangeSelecting && "sheet-range-selecting")}
           columns={columns}
+          columnWidths={columnWidths}
           renderers={renderers}
           rowHeight={rowHeight}
           rows={rows}
@@ -3427,6 +3492,7 @@ export function SpreadsheetWorkspace({
               "--sheet-font-size": `${snapshot.viewSetting.fontSize}px`
             } as CSSProperties
           }
+          onColumnWidthsChange={setColumnWidths}
           onRowsChange={handleRowsChange}
           onFill={isAdmin ? handleFill : undefined}
           onCellMouseDown={(args, event) => {
@@ -3692,6 +3758,77 @@ export function SpreadsheetWorkspace({
               </div>
             )}
           </div>
+        </div>
+      ) : null}
+
+      {columnCheckDialog ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4 py-6">
+          <form
+            className="w-full max-w-lg rounded-lg border border-[color:var(--line)] bg-[color:var(--panel)] p-4 shadow-2xl"
+            onSubmit={(event) => {
+              event.preventDefault();
+
+              const terms = parseColumnCheckTerms(columnCheckDialog.text);
+
+              startTransition(() => {
+                void updateSelectedColumnRules({ matchHighlightTerms: terms });
+              });
+              setColumnCheckDialog(null);
+            }}
+          >
+            <div className="flex items-center justify-between gap-3 border-b border-[color:var(--line)] pb-3">
+              <div className="min-w-0">
+                <h2 className="truncate text-sm font-semibold">
+                  Check column {columnCheckDialog.columnKey}
+                </h2>
+                <p className="mt-1 text-xs text-[color:var(--text-muted)]">
+                  {parseColumnCheckTerms(columnCheckDialog.text).length} terms
+                </p>
+              </div>
+              <button
+                aria-label="Close column check"
+                className="focus-ring inline-flex h-8 w-8 items-center justify-center rounded-md border border-[color:var(--line)] transition hover:bg-[color:var(--panel-muted)]"
+                type="button"
+                onClick={() => setColumnCheckDialog(null)}
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            <textarea
+              autoFocus
+              className="focus-ring mt-4 min-h-40 w-full resize-y rounded-md border border-[color:var(--line)] bg-[color:var(--panel-muted)] px-3 py-2 text-sm text-[color:var(--text)] outline-none"
+              value={columnCheckDialog.text}
+              onChange={(event) =>
+                setColumnCheckDialog((current) =>
+                  current ? { ...current, text: event.target.value } : current
+                )
+              }
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && !event.shiftKey) {
+                  event.preventDefault();
+                  event.currentTarget.form?.requestSubmit();
+                }
+              }}
+            />
+
+            <div className="mt-4 flex flex-wrap justify-end gap-2">
+              <button
+                className="focus-ring inline-flex h-9 items-center justify-center rounded-md border border-[color:var(--line)] px-3 text-sm font-semibold transition hover:bg-[color:var(--panel-muted)]"
+                type="button"
+                onClick={() => setColumnCheckDialog(null)}
+              >
+                Cancel
+              </button>
+              <button
+                className="focus-ring inline-flex h-9 items-center justify-center gap-2 rounded-md border border-[color:var(--accent)] bg-[color:var(--accent)] px-3 text-sm font-semibold text-black transition hover:opacity-90"
+                type="submit"
+              >
+                <Save size={15} />
+                Check
+              </button>
+            </div>
+          </form>
         </div>
       ) : null}
     </section>

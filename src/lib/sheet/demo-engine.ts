@@ -143,6 +143,41 @@ function getDuplicateHighlightedRows(
   return highlightedRows;
 }
 
+function getMatchHighlightedRows(
+  cells: CellState[],
+  columnPermissions: ColumnPermissionState[]
+): Set<number> {
+  const highlightedRows = new Set<number>();
+  const cellLookup = new Map(cells.map((cell) => [getCellKey(cell.rowIndex, cell.columnKey), cell]));
+  const matchRules = columnPermissions
+    .map((permission) => ({
+      columnKey: permission.columnKey,
+      terms: new Set(
+        permission.matchHighlightTerms.map((term) => term.trim().toLowerCase()).filter(Boolean)
+      )
+    }))
+    .filter((rule) => rule.terms.size > 0);
+
+  for (const rule of matchRules) {
+    for (let rowIndex = 1; rowIndex <= MAX_ROWS; rowIndex += 1) {
+      const cell = cellLookup.get(getCellKey(rowIndex, rule.columnKey));
+      const value = (cell?.computedValue ?? cell?.value ?? "").trim().toLowerCase();
+
+      if (!value) {
+        continue;
+      }
+
+      const valueWords = value.split(/\s+/).filter(Boolean);
+
+      if (rule.terms.has(value) || valueWords.some((word) => rule.terms.has(word))) {
+        highlightedRows.add(rowIndex);
+      }
+    }
+  }
+
+  return highlightedRows;
+}
+
 export function getDemoCellsFromSnapshot(snapshot: SheetSnapshot): CellState[] {
   return cellsFromSnapshot(snapshot);
 }
@@ -159,6 +194,7 @@ export function buildRowsFromCells(
   );
   const ownershipLookup = new Map(ownerships.map((ownership) => [ownership.rowIndex, ownership]));
   const duplicateHighlightedRows = getDuplicateHighlightedRows(cells, snapshot.columnPermissions);
+  const matchHighlightedRows = getMatchHighlightedRows(cells, snapshot.columnPermissions);
   const rows: SheetGridRow[] = [];
 
   for (let rowIndex = 1; rowIndex <= MAX_ROWS; rowIndex += 1) {
@@ -203,6 +239,7 @@ export function buildRowsFromCells(
       __lockReason: lockReason,
       __format: format,
       __duplicateHighlight: duplicateHighlightedRows.has(rowIndex),
+      __matchHighlight: matchHighlightedRows.has(rowIndex),
       ...values
     });
   }

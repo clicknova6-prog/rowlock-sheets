@@ -73,7 +73,8 @@ export function createDemoSnapshot(): SheetSnapshot {
       editableByMember: ["A", "B", "D", "F", "G", "I", "J"].includes(columnKey),
       claimRowOnEdit: ["A", "B", "D", "F", "G", "I", "J"].includes(columnKey),
       memberWriteOnce: ["D"].includes(columnKey),
-      duplicateHighlight: ["A"].includes(columnKey)
+      duplicateHighlight: ["A"].includes(columnKey),
+      matchHighlightTerms: []
     })),
     validationRules: [
       {

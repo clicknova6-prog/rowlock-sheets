@@ -39,6 +39,20 @@ function isValidEmail(email: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 }
 
+function parseMatchHighlightTerms(value: string): string[] {
+  try {
+    const parsed = JSON.parse(value) as unknown;
+
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+
+    return [...new Set(parsed.map((term) => String(term).trim()).filter(Boolean))].slice(0, 500);
+  } catch {
+    return [];
+  }
+}
+
 function validatePassword(password: string): string | null {
   if (password.length < 8) {
     return "Password must be at least 8 characters.";
@@ -205,7 +219,10 @@ export async function saveColumnPermissionsAction(formData: FormData): Promise<v
     claimRowOnEdit:
       formData.has(`permission-${columnKey}`) && formData.has(`claimRow-${columnKey}`),
     memberWriteOnce: formData.has(`writeOnce-${columnKey}`),
-    duplicateHighlight: formData.has(`duplicateHighlight-${columnKey}`)
+    duplicateHighlight: formData.has(`duplicateHighlight-${columnKey}`),
+    matchHighlightTerms: parseMatchHighlightTerms(
+      getString(formData, `matchHighlightTerms-${columnKey}`)
+    )
   }));
 
   await prisma.$transaction(

@@ -11,6 +11,7 @@ const updateColumnRulesSchema = z.object({
   claimRowOnEdit: z.boolean(),
   memberWriteOnce: z.boolean(),
   duplicateHighlight: z.boolean(),
+  matchHighlightTerms: z.array(z.string()).max(500).optional(),
   sourceClientId: z.string().min(1).max(128).optional()
 });
 

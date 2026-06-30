@@ -83,10 +83,25 @@ export interface UpdateColumnRuleSettingsInput {
   claimRowOnEdit: boolean;
   memberWriteOnce: boolean;
   duplicateHighlight: boolean;
+  matchHighlightTerms?: string[];
 }
 
 function hasClaimableValue(cell: CellState): boolean {
   return (cell.formula ?? cell.value).trim().length > 0;
+}
+
+function normalizeMatchHighlightTerms(values: string[] | undefined): string[] {
+  const terms = new Set<string>();
+
+  for (const value of values ?? []) {
+    const term = value.trim();
+
+    if (term) {
+      terms.add(term);
+    }
+  }
+
+  return [...terms].slice(0, 500);
 }
 
 function normalizeExistingCells(
@@ -324,7 +339,8 @@ async function getPermissionStates(sheetId: string): Promise<ColumnPermissionSta
       editableByMember: true,
       claimRowOnEdit: true,
       memberWriteOnce: true,
-      duplicateHighlight: true
+      duplicateHighlight: true,
+      matchHighlightTerms: true
     }
   });
 
@@ -333,7 +349,10 @@ async function getPermissionStates(sheetId: string): Promise<ColumnPermissionSta
     editableByMember: permission.editableByMember,
     claimRowOnEdit: permission.claimRowOnEdit,
     memberWriteOnce: permission.memberWriteOnce,
-    duplicateHighlight: permission.duplicateHighlight
+    duplicateHighlight: permission.duplicateHighlight,
+    matchHighlightTerms: Array.isArray(permission.matchHighlightTerms)
+      ? permission.matchHighlightTerms.map((term) => String(term)).filter(Boolean)
+      : []
   }));
 }
 
@@ -985,6 +1004,7 @@ export async function updateColumnRuleSettings(
   });
 
   const claimRowOnEdit = input.editableByMember && input.claimRowOnEdit;
+  const matchHighlightTerms = normalizeMatchHighlightTerms(input.matchHighlightTerms);
 
   await prisma.$transaction(async (tx) => {
     await tx.columnPermission.upsert({
@@ -1000,13 +1020,15 @@ export async function updateColumnRuleSettings(
         editableByMember: input.editableByMember,
         claimRowOnEdit,
         memberWriteOnce: input.memberWriteOnce,
-        duplicateHighlight: input.duplicateHighlight
+        duplicateHighlight: input.duplicateHighlight,
+        matchHighlightTerms
       },
       update: {
         editableByMember: input.editableByMember,
         claimRowOnEdit,
         memberWriteOnce: input.memberWriteOnce,
-        duplicateHighlight: input.duplicateHighlight
+        duplicateHighlight: input.duplicateHighlight,
+        matchHighlightTerms
       }
     });
 
@@ -1021,7 +1043,8 @@ export async function updateColumnRuleSettings(
           editableByMember: input.editableByMember,
           claimRowOnEdit,
           memberWriteOnce: input.memberWriteOnce,
-          duplicateHighlight: input.duplicateHighlight
+          duplicateHighlight: input.duplicateHighlight,
+          matchHighlightTerms
         }
       }
     });

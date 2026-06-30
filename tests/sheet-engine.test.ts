@@ -12,21 +12,24 @@ const permissions: ColumnPermissionState[] = [
     editableByMember: true,
     claimRowOnEdit: true,
     memberWriteOnce: false,
-    duplicateHighlight: false
+    duplicateHighlight: false,
+    matchHighlightTerms: []
   },
   {
     columnKey: "B",
     editableByMember: false,
     claimRowOnEdit: false,
     memberWriteOnce: false,
-    duplicateHighlight: false
+    duplicateHighlight: false,
+    matchHighlightTerms: []
   },
   {
     columnKey: "C",
     editableByMember: true,
     claimRowOnEdit: false,
     memberWriteOnce: true,
-    duplicateHighlight: false
+    duplicateHighlight: false,
+    matchHighlightTerms: []
   }
 ];
 
