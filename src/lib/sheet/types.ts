@@ -1,4 +1,4 @@
-import type { Role, RuleOperator } from "@/generated/prisma/enums";
+import type { Role, RuleJoinOperator, RuleOperator } from "@/generated/prisma/enums";
 import type { ColumnKey } from "@/lib/constants";
 
 export type AppRole = Role;
@@ -89,6 +89,7 @@ export interface RuleConditionState {
   id?: string;
   columnKey: ColumnKey;
   operator: RuleOperator;
+  joinOperator: RuleJoinOperator;
   values: string[];
 }
 

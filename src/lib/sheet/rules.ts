@@ -1,4 +1,4 @@
-import { RuleOperator } from "@/generated/prisma/enums";
+import { RuleJoinOperator, RuleOperator } from "@/generated/prisma/enums";
 import { COLUMN_KEYS, MAX_ROWS, getCellKey } from "@/lib/constants";
 import type { ColumnKey } from "@/lib/constants";
 import type { CellState, ConditionalRuleState, RuleConditionState } from "./types";
@@ -54,6 +54,15 @@ export function doesConditionMatch(
       return allowedValues.length > 0 && allowedValues.includes(normalizedLower);
     case RuleOperator.CONTAINS:
       return allowedValues.some((allowedValue) => normalizedLower.includes(allowedValue));
+    case RuleOperator.NOT_EQUALS:
+      return allowedValues.length > 0 && !allowedValues.includes(normalizedLower);
+    case RuleOperator.NOT_IN_LIST:
+      return allowedValues.length > 0 && !allowedValues.includes(normalizedLower);
+    case RuleOperator.NOT_CONTAINS:
+      return (
+        allowedValues.length > 0 &&
+        allowedValues.every((allowedValue) => !normalizedLower.includes(allowedValue))
+      );
     default:
       return false;
   }
@@ -68,10 +77,26 @@ export function rowMatchesRule(
     return false;
   }
 
-  return conditions.every((condition) => {
+  let currentAndGroupMatches = true;
+
+  for (const [index, condition] of conditions.entries()) {
     const cell = lookup.get(getCellKey(rowIndex, condition.columnKey));
-    return doesConditionMatch(condition, getComparableValue(cell));
-  });
+    const conditionMatches = doesConditionMatch(condition, getComparableValue(cell));
+    const joinOperator = index === 0 ? RuleJoinOperator.AND : condition.joinOperator;
+
+    if (joinOperator === RuleJoinOperator.OR) {
+      if (currentAndGroupMatches) {
+        return true;
+      }
+
+      currentAndGroupMatches = conditionMatches;
+      continue;
+    }
+
+    currentAndGroupMatches = currentAndGroupMatches && conditionMatches;
+  }
+
+  return currentAndGroupMatches;
 }
 
 export function evaluateConditionalRules(
@@ -135,6 +160,14 @@ export function toRuleOperator(value: string): RuleOperator {
   }
 
   return RuleOperator.EQUALS;
+}
+
+export function toRuleJoinOperator(value: string): RuleJoinOperator {
+  if (Object.values(RuleJoinOperator).includes(value as RuleJoinOperator)) {
+    return value as RuleJoinOperator;
+  }
+
+  return RuleJoinOperator.AND;
 }
 
 export function isConditionColumn(value: string): value is ColumnKey {

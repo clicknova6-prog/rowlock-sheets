@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { Role, RuleOperator } from "@/generated/prisma/enums";
+import { Role, RuleJoinOperator, RuleOperator } from "@/generated/prisma/enums";
 import { getCellEditDecision } from "@/lib/sheet/permissions";
 import { getRowsForPersistedCellUpdates } from "@/lib/sheet/row-payloads";
 import { evaluateConditionalRules } from "@/lib/sheet/rules";
@@ -201,16 +201,19 @@ describe("conditional rule engine", () => {
           {
             columnKey: "A",
             operator: RuleOperator.CONTAINS,
+            joinOperator: RuleJoinOperator.AND,
             values: ["Ashar"]
           },
           {
             columnKey: "D",
             operator: RuleOperator.EMPTY,
+            joinOperator: RuleJoinOperator.AND,
             values: []
           },
           {
             columnKey: "F",
             operator: RuleOperator.EMPTY,
+            joinOperator: RuleJoinOperator.AND,
             values: []
           }
         ]
@@ -237,6 +240,7 @@ describe("conditional rule engine", () => {
             {
               columnKey: "A",
               operator: RuleOperator.CONTAINS,
+              joinOperator: RuleJoinOperator.AND,
               values: ["Ashar"]
             }
           ]
@@ -245,6 +249,95 @@ describe("conditional rule engine", () => {
     });
 
     expect(violations).toHaveLength(0);
+  });
+
+  it("supports OR groups and negative conditional operators", () => {
+    const cells: CellState[] = [
+      { rowIndex: 1, columnKey: "A", value: "Ashar" },
+      { rowIndex: 1, columnKey: "B", value: "working" },
+      { rowIndex: 1, columnKey: "C", value: "fresh lead" },
+      { rowIndex: 1, columnKey: "D", value: "" },
+      { rowIndex: 1, columnKey: "E", value: "" },
+      { rowIndex: 2, columnKey: "A", value: "Ashar" },
+      { rowIndex: 2, columnKey: "B", value: "NEC" },
+      { rowIndex: 2, columnKey: "C", value: "fresh lead" },
+      { rowIndex: 2, columnKey: "D", value: "" },
+      { rowIndex: 2, columnKey: "E", value: "" },
+      { rowIndex: 3, columnKey: "A", value: "Mina" },
+      { rowIndex: 3, columnKey: "B", value: "working" },
+      { rowIndex: 3, columnKey: "C", value: "OON" },
+      { rowIndex: 3, columnKey: "D", value: "" },
+      { rowIndex: 3, columnKey: "E", value: "" }
+    ];
+
+    const rules: ConditionalRuleState[] = [
+      {
+        id: "rule-logic",
+        name: "Ashar open usable rows",
+        limitCount: 0,
+        enabled: true,
+        conditions: [
+          {
+            columnKey: "A",
+            operator: RuleOperator.CONTAINS,
+            joinOperator: RuleJoinOperator.AND,
+            values: ["Ashar"]
+          },
+          {
+            columnKey: "D",
+            operator: RuleOperator.EMPTY,
+            joinOperator: RuleJoinOperator.AND,
+            values: []
+          },
+          {
+            columnKey: "E",
+            operator: RuleOperator.EMPTY,
+            joinOperator: RuleJoinOperator.AND,
+            values: []
+          },
+          {
+            columnKey: "B",
+            operator: RuleOperator.NOT_IN_LIST,
+            joinOperator: RuleJoinOperator.AND,
+            values: ["NEC", "not enough candidates"]
+          },
+          {
+            columnKey: "C",
+            operator: RuleOperator.NOT_CONTAINS,
+            joinOperator: RuleJoinOperator.AND,
+            values: ["OON"]
+          }
+        ]
+      },
+      {
+        id: "rule-or",
+        name: "Ashar or OON",
+        limitCount: 1,
+        enabled: true,
+        conditions: [
+          {
+            columnKey: "A",
+            operator: RuleOperator.CONTAINS,
+            joinOperator: RuleJoinOperator.AND,
+            values: ["Ashar"]
+          },
+          {
+            columnKey: "C",
+            operator: RuleOperator.CONTAINS,
+            joinOperator: RuleJoinOperator.OR,
+            values: ["OON"]
+          }
+        ]
+      }
+    ];
+
+    const violations = evaluateConditionalRules({ cells, rules, maxRows: 3 });
+
+    expect(violations).toHaveLength(2);
+    expect(violations.map((violation) => violation.ruleId)).toEqual([
+      "rule-logic",
+      "rule-or"
+    ]);
   });
 });
 

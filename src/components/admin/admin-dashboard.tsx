@@ -21,7 +21,7 @@ import {
 } from "@/app/actions/admin-actions";
 import { CreateMemberForm } from "@/components/admin/create-member-form";
 import { MemberManagement } from "@/components/admin/member-management";
-import { RuleOperator } from "@/generated/prisma/enums";
+import { RuleJoinOperator, RuleOperator } from "@/generated/prisma/enums";
 import { COLUMN_KEYS, MAX_ROWS } from "@/lib/constants";
 import type {
   AdminMemberState,
@@ -34,8 +34,16 @@ const OPERATORS: Array<{ value: RuleOperator; label: string }> = [
   { value: RuleOperator.EQUALS, label: "Equals" },
   { value: RuleOperator.IN_LIST, label: "In list" },
   { value: RuleOperator.CONTAINS, label: "Contains" },
+  { value: RuleOperator.NOT_EQUALS, label: "Does not equal" },
+  { value: RuleOperator.NOT_IN_LIST, label: "Not in list" },
+  { value: RuleOperator.NOT_CONTAINS, label: "Does not contain" },
   { value: RuleOperator.EMPTY, label: "Empty" },
   { value: RuleOperator.NOT_EMPTY, label: "Not empty" }
+];
+
+const JOIN_OPERATORS: Array<{ value: RuleJoinOperator; label: string }> = [
+  { value: RuleJoinOperator.AND, label: "AND" },
+  { value: RuleJoinOperator.OR, label: "OR" }
 ];
 
 function FieldLabel({ children }: { children: React.ReactNode }) {
@@ -240,20 +248,45 @@ function ConditionFields({
 }: {
   conditions: RuleConditionState[];
 }) {
-  const rows = Array.from({ length: 4 }, (_, index) => conditions[index] ?? null);
+  const rows = Array.from({ length: 8 }, (_, index) => conditions[index] ?? null);
 
   return (
     <div className="space-y-3">
-      <div className="grid gap-2 text-xs font-semibold uppercase tracking-wide text-[color:var(--text-muted)] md:grid-cols-[110px_150px_1fr]">
+      <div className="grid gap-2 text-xs font-semibold uppercase tracking-wide text-[color:var(--text-muted)] md:grid-cols-[86px_110px_170px_1fr]">
+        <span>Join</span>
         <span>Column</span>
         <span>Condition</span>
         <span>Names or values</span>
       </div>
       {rows.map((condition, index) => (
         <div
-          className="grid gap-2 rounded-md border border-[color:var(--line)] bg-[color:var(--panel-muted)] p-2 md:grid-cols-[110px_150px_1fr]"
+          className="grid gap-2 rounded-md border border-[color:var(--line)] bg-[color:var(--panel-muted)] p-2 md:grid-cols-[86px_110px_170px_1fr]"
           key={`${condition?.id ?? "new"}-${index}`}
         >
+          {index === 0 ? (
+            <>
+              <input
+                name="conditionJoinOperator"
+                type="hidden"
+                value={RuleJoinOperator.AND}
+              />
+              <span className="flex h-10 items-center rounded-md border border-[color:var(--line)] px-3 text-sm text-[color:var(--text-muted)]">
+                Where
+              </span>
+            </>
+          ) : (
+            <SelectInput
+              aria-label="Join operator"
+              defaultValue={condition?.joinOperator ?? RuleJoinOperator.AND}
+              name="conditionJoinOperator"
+            >
+              {JOIN_OPERATORS.map((operator) => (
+                <option key={operator.value} value={operator.value}>
+                  {operator.label}
+                </option>
+              ))}
+            </SelectInput>
+          )}
           <SelectInput
             aria-label="Column"
             defaultValue={condition?.columnKey ?? ""}
@@ -286,7 +319,8 @@ function ConditionFields({
         </div>
       ))}
       <HelpText>
-        Add one condition per row. Empty and Not empty ignore the values box.
+        Add one condition per row. Empty and Not empty ignore the values box. AND is
+        grouped before OR, so A AND B OR C works as (A AND B) OR C.
       </HelpText>
     </div>
   );

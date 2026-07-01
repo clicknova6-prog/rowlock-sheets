@@ -1,4 +1,4 @@
-import { Role } from "@/generated/prisma/enums";
+import { Role, RuleJoinOperator } from "@/generated/prisma/enums";
 import { COLUMN_KEYS, MAX_ROWS, assertColumnKey, getCellKey } from "@/lib/constants";
 import { prisma } from "@/lib/db";
 import {
@@ -66,6 +66,7 @@ export function mapConditionalRule(rule: {
     id: string;
     columnKey: string;
     operator: ConditionalRuleState["conditions"][number]["operator"];
+    joinOperator: ConditionalRuleState["conditions"][number]["joinOperator"];
     values: unknown;
   }>;
 }): ConditionalRuleState {
@@ -79,6 +80,7 @@ export function mapConditionalRule(rule: {
       id: condition.id,
       columnKey: assertColumnKey(condition.columnKey),
       operator: condition.operator,
+      joinOperator: condition.joinOperator ?? RuleJoinOperator.AND,
       values: stringArrayFromJson(condition.values)
     }))
   };

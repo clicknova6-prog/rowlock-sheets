@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { AuditAction, RuleOperator } from "@/generated/prisma/enums";
+import { AuditAction, RuleJoinOperator, RuleOperator } from "@/generated/prisma/enums";
 import { requireAdmin } from "@/lib/auth/session";
 import { COLUMN_KEYS, assertColumnKey, isValidRowIndex } from "@/lib/constants";
 import { prisma } from "@/lib/db";
@@ -17,7 +17,7 @@ import {
   normalizeSheetFontSize,
   normalizeSheetFrozenHeaderRowIndex
 } from "@/lib/sheet/formatting";
-import { parseRuleValues, toRuleOperator } from "@/lib/sheet/rules";
+import { parseRuleValues, toRuleJoinOperator, toRuleOperator } from "@/lib/sheet/rules";
 import { parseAllowedValues } from "@/lib/sheet/validation";
 
 export interface CreateMemberActionState {
@@ -435,6 +435,7 @@ export async function saveConditionalRuleAction(formData: FormData): Promise<voi
 
   const columns = formData.getAll("conditionColumn").map((value) => String(value));
   const operators = formData.getAll("conditionOperator").map((value) => String(value));
+  const joinOperators = formData.getAll("conditionJoinOperator").map((value) => String(value));
   const values = formData.getAll("conditionValues").map((value) => String(value));
 
   const conditions = columns
@@ -444,9 +445,15 @@ export async function saveConditionalRuleAction(formData: FormData): Promise<voi
       }
 
       const operator = toRuleOperator(operators[index] ?? RuleOperator.EQUALS);
+      const joinOperator =
+        index === 0
+          ? RuleJoinOperator.AND
+          : toRuleJoinOperator(joinOperators[index] ?? RuleJoinOperator.AND);
+
       return {
         columnKey: assertColumnKey(column),
         operator,
+        joinOperator,
         values:
           operator === RuleOperator.EMPTY || operator === RuleOperator.NOT_EMPTY
             ? []
@@ -471,6 +478,7 @@ export async function saveConditionalRuleAction(formData: FormData): Promise<voi
           ruleId: id,
           columnKey: condition!.columnKey,
           operator: condition!.operator,
+          joinOperator: condition!.joinOperator,
           values: condition!.values
         }))
       });
@@ -486,6 +494,7 @@ export async function saveConditionalRuleAction(formData: FormData): Promise<voi
             create: conditions.map((condition) => ({
               columnKey: condition!.columnKey,
               operator: condition!.operator,
+              joinOperator: condition!.joinOperator,
               values: condition!.values
             }))
           }

@@ -21,8 +21,16 @@ enum RuleOperator {
   EQUALS
   IN_LIST
   CONTAINS
+  NOT_EQUALS
+  NOT_IN_LIST
+  NOT_CONTAINS
   EMPTY
   NOT_EMPTY
+}
+
+enum RuleJoinOperator {
+  AND
+  OR
 }
 
 enum AuditAction {
@@ -212,13 +220,14 @@ model ConditionalRule {
 }
 
 model RuleCondition {
-  id        String       @id @default(cuid())
-  ruleId    String
-  columnKey String       @db.VarChar(1)
-  operator  RuleOperator
-  values    Json?
-  createdAt DateTime     @default(now())
-  updatedAt DateTime     @updatedAt
+  id           String           @id @default(cuid())
+  ruleId       String
+  columnKey    String           @db.VarChar(1)
+  operator     RuleOperator
+  joinOperator RuleJoinOperator @default(AND)
+  values       Json?
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
 
   rule ConditionalRule @relation(fields: [ruleId], references: [id], onDelete: Cascade)
 

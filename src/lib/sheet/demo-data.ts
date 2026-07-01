@@ -1,4 +1,4 @@
-import { Role, RuleOperator } from "@/generated/prisma/enums";
+import { Role, RuleJoinOperator, RuleOperator } from "@/generated/prisma/enums";
 import { COLUMN_KEYS } from "@/lib/constants";
 import { buildRowsFromCells } from "./demo-engine";
 import { DEFAULT_SHEET_VIEW_SETTING } from "./formatting";
@@ -99,16 +99,19 @@ export function createDemoSnapshot(): SheetSnapshot {
           {
             columnKey: "A",
             operator: RuleOperator.CONTAINS,
+            joinOperator: RuleJoinOperator.AND,
             values: ["Ashar"]
           },
           {
             columnKey: "D",
             operator: RuleOperator.EMPTY,
+            joinOperator: RuleJoinOperator.AND,
             values: []
           },
           {
             columnKey: "F",
             operator: RuleOperator.EMPTY,
+            joinOperator: RuleJoinOperator.AND,
             values: []
           }
         ]
