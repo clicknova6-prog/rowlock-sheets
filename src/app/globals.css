@@ -200,6 +200,55 @@ option {
   word-break: normal;
 }
 
+.sheet-cell-link-wrap {
+  position: relative;
+  display: inline-flex;
+  max-width: 100%;
+  align-items: center;
+  gap: 3px;
+  vertical-align: baseline;
+}
+
+.sheet-cell-link {
+  color: #2563eb !important;
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+  overflow-wrap: anywhere;
+}
+
+.dark .sheet-cell-link {
+  color: #60a5fa !important;
+}
+
+.sheet-cell-link-copy {
+  display: inline-flex;
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--panel);
+  color: var(--text-muted);
+  opacity: 0;
+  transform: translateY(-1px);
+  transition: opacity 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+
+.sheet-cell-link-wrap:hover .sheet-cell-link-copy,
+.sheet-cell-link-copy:focus-visible {
+  opacity: 1;
+}
+
+.sheet-cell-link-copy:hover,
+.sheet-cell-link-copy:focus-visible {
+  border-color: var(--accent);
+  color: var(--accent);
+  outline: none;
+}
+
 .sheet-range-selecting {
   cursor: cell;
 }

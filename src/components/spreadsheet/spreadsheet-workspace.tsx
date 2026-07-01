@@ -13,6 +13,7 @@ import {
   AlertCircle,
   Bold,
   CheckCircle2,
+  Copy,
   Eraser,
   History,
   Italic,
@@ -147,6 +148,8 @@ const CONDENSED_ROW_VERTICAL_PADDING_PX = 6;
 const SELECTION_AUTO_SCROLL_EDGE_PX = 56;
 const SELECTION_AUTO_SCROLL_MAX_PX = 28;
 const MAX_CELL_HISTORY_ENTRIES = 100;
+const CELL_URL_PATTERN = /(https?:\/\/[^\s<>"']+|www\.[^\s<>"']+)/gi;
+const TRAILING_URL_PUNCTUATION_PATTERN = /[),.;:!?]+$/;
 let demoEnginePromise: Promise<DemoEngineModule> | null = null;
 
 function loadDemoEngine(): Promise<DemoEngineModule> {
@@ -204,7 +207,166 @@ function getRenderedCellValue(row: SheetGridRow, columnKey: ColumnKey): string {
     : String(row[columnKey] ?? "");
 }
 
-function renderWrappedCellText(value: string): React.ReactNode {
+function getSafeLinkHref(value: string): string | null {
+  const trimmedValue = value.trim();
+  const href = trimmedValue.toLowerCase().startsWith("www.")
+    ? `https://${trimmedValue}`
+    : trimmedValue;
+
+  try {
+    const url = new URL(href);
+
+    return url.protocol === "http:" || url.protocol === "https:" ? url.href : null;
+  } catch {
+    return null;
+  }
+}
+
+async function copyTextToClipboard(value: string): Promise<void> {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(value);
+    return;
+  }
+
+  const textarea = document.createElement("textarea");
+  textarea.value = value;
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
+  textarea.style.pointerEvents = "none";
+  document.body.appendChild(textarea);
+  textarea.select();
+  document.execCommand("copy");
+  document.body.removeChild(textarea);
+}
+
+function splitTrailingUrlPunctuation(value: string): {
+  linkText: string;
+  trailingText: string;
+} {
+  const trailingMatch = value.match(TRAILING_URL_PUNCTUATION_PATTERN);
+
+  if (!trailingMatch) {
+    return { linkText: value, trailingText: "" };
+  }
+
+  const trailingText = trailingMatch[0];
+
+  return {
+    linkText: value.slice(0, -trailingText.length),
+    trailingText
+  };
+}
+
+function renderPlainCellSegment(segment: string, key: React.Key): React.ReactNode {
+  return (
+    <span className="sheet-cell-word" key={key}>
+      {segment}
+    </span>
+  );
+}
+
+function renderLinkedCellSegment(
+  segment: string,
+  keyPrefix: React.Key,
+  onCopyLink?: (href: string) => void
+): React.ReactNode {
+  const keyBase = String(keyPrefix);
+  const parts: React.ReactNode[] = [];
+  let lastIndex = 0;
+
+  for (const match of segment.matchAll(CELL_URL_PATTERN)) {
+    const rawMatch = match[0];
+    const matchIndex = match.index ?? 0;
+
+    if (matchIndex > lastIndex) {
+      parts.push(
+        renderPlainCellSegment(
+          segment.slice(lastIndex, matchIndex),
+          `${keyBase}-text-${lastIndex}`
+        )
+      );
+    }
+
+    const { linkText, trailingText } = splitTrailingUrlPunctuation(rawMatch);
+    const href = getSafeLinkHref(linkText);
+
+    if (href) {
+      parts.push(
+        <span className="sheet-cell-link-wrap" key={`${keyBase}-link-${matchIndex}`}>
+          <a
+            className="sheet-cell-link"
+            href={href}
+            rel="noreferrer"
+            target="_blank"
+            title={href}
+            onClick={(event) => {
+              event.stopPropagation();
+            }}
+            onDoubleClick={(event) => {
+              event.stopPropagation();
+            }}
+            onMouseDown={(event) => {
+              event.stopPropagation();
+            }}
+          >
+            {linkText}
+          </a>
+          {onCopyLink ? (
+            <button
+              aria-label="Copy link"
+              className="sheet-cell-link-copy"
+              title="Copy link"
+              type="button"
+              onClick={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                onCopyLink(href);
+              }}
+              onDoubleClick={(event) => {
+                event.stopPropagation();
+              }}
+              onMouseDown={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+              }}
+            >
+              <Copy size={12} />
+            </button>
+          ) : null}
+        </span>
+      );
+    } else {
+      parts.push(
+        renderPlainCellSegment(rawMatch, `${keyBase}-url-text-${matchIndex}`)
+      );
+    }
+
+    if (trailingText) {
+      parts.push(
+        renderPlainCellSegment(
+          trailingText,
+          `${keyBase}-trailing-${matchIndex}`
+        )
+      );
+    }
+
+    lastIndex = matchIndex + rawMatch.length;
+  }
+
+  if (lastIndex < segment.length) {
+    parts.push(
+      renderPlainCellSegment(segment.slice(lastIndex), `${keyBase}-text-${lastIndex}`)
+    );
+  }
+
+  return parts.length > 0 ? parts : renderPlainCellSegment(segment, keyPrefix);
+}
+
+function renderWrappedCellText(
+  value: string,
+  onCopyLink?: (href: string) => void
+): React.ReactNode {
   if (!value) {
     return null;
   }
@@ -218,11 +380,7 @@ function renderWrappedCellText(value: string): React.ReactNode {
       return " ";
     }
 
-    return (
-      <span className="sheet-cell-word" key={index}>
-        {segment}
-      </span>
-    );
+    return renderLinkedCellSegment(segment, index, onCopyLink);
   });
 }
 
@@ -3322,6 +3480,16 @@ export function SpreadsheetWorkspace({
     });
   }
 
+  const copyLinkToClipboard = useCallback(async (href: string): Promise<void> => {
+    try {
+      await copyTextToClipboard(href);
+      setError(null);
+      setMessage("Link copied.");
+    } catch {
+      setError("Unable to copy link.");
+    }
+  }, []);
+
   const SpreadsheetTextEditor = useCallback(function SpreadsheetTextEditor({
     row,
     column,
@@ -3460,7 +3628,7 @@ export function SpreadsheetWorkspace({
                     {getUserInitials(lock.userId)}
                   </span>
                 ) : null}
-                {renderWrappedCellText(renderedValue)}
+                {renderWrappedCellText(renderedValue, copyLinkToClipboard)}
               </div>
             );
           },
@@ -3473,14 +3641,21 @@ export function SpreadsheetWorkspace({
                 style={getCellTextStyle(getCellFormat(row, columnKey))}
                 title={row.__formula[columnKey] ? row[columnKey] : undefined}
               >
-                {renderWrappedCellText(renderedValue)}
+                {renderWrappedCellText(renderedValue, copyLinkToClipboard)}
               </div>
             );
           }
         })
       )
     ];
-  }, [locks, snapshot.columns, snapshot.currentUser.id, SpreadsheetTextEditor, selectedRange]);
+  }, [
+    copyLinkToClipboard,
+    locks,
+    snapshot.columns,
+    snapshot.currentUser.id,
+    SpreadsheetTextEditor,
+    selectedRange
+  ]);
 
   return (
     <section className="space-y-4">
