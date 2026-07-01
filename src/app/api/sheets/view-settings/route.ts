@@ -1,11 +1,14 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { getCurrentUser } from "@/lib/auth/session";
-import { SheetRuleError, updateSheetColumnWidths } from "@/lib/sheet/service";
+import { MAX_ROWS } from "@/lib/constants";
+import { SheetRuleError, updateSheetViewSettings } from "@/lib/sheet/service";
 
-const updateColumnWidthsSchema = z.object({
+const updateSheetViewSettingsSchema = z.object({
   sheetId: z.string().min(1),
-  columnWidths: z.record(z.string(), z.number().int().min(1).max(5000))
+  columnWidths: z.record(z.string(), z.number().int().min(1).max(5000)).optional(),
+  condensedView: z.boolean().optional(),
+  frozenHeaderRowIndex: z.number().int().min(1).max(MAX_ROWS).nullable().optional()
 });
 
 export async function POST(request: Request): Promise<NextResponse> {
@@ -16,8 +19,8 @@ export async function POST(request: Request): Promise<NextResponse> {
   }
 
   try {
-    const payload = updateColumnWidthsSchema.parse(await request.json());
-    const viewSetting = await updateSheetColumnWidths(user, payload);
+    const payload = updateSheetViewSettingsSchema.parse(await request.json());
+    const viewSetting = await updateSheetViewSettings(user, payload);
 
     return NextResponse.json({ viewSetting });
   } catch (error) {
@@ -30,6 +33,6 @@ export async function POST(request: Request): Promise<NextResponse> {
     }
 
     console.error(error);
-    return NextResponse.json({ error: "Unable to save column widths." }, { status: 500 });
+    return NextResponse.json({ error: "Unable to save sheet view settings." }, { status: 500 });
   }
 }

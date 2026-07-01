@@ -73,6 +73,8 @@ export interface SheetViewSettingState {
   alternateEvenColor: string;
   fontSize: number;
   columnWidths: Partial<Record<ColumnKey, number>>;
+  condensedView: boolean;
+  frozenHeaderRowIndex: number | null;
 }
 
 export interface ValidationRuleState {

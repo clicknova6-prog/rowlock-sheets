@@ -12,6 +12,8 @@ import {
   normalizeFormatPatch,
   normalizeHexColor,
   normalizeSheetColumnWidths,
+  normalizeSheetCondensedView,
+  normalizeSheetFrozenHeaderRowIndex,
   normalizeSheetFontSize
 } from "./formatting";
 import { normalizeCellInput, recalculateCells, mergeRecalculatedCells } from "./formulas";
@@ -91,9 +93,11 @@ export interface UpdateColumnRuleSettingsInput {
   matchHighlightTerms?: string[];
 }
 
-export interface UpdateSheetColumnWidthsInput {
+export interface UpdateSheetViewSettingsInput {
   sheetId: string;
-  columnWidths: Record<string, number>;
+  columnWidths?: Record<string, number>;
+  condensedView?: boolean;
+  frozenHeaderRowIndex?: number | null;
 }
 
 function hasClaimableValue(cell: CellState): boolean {
@@ -1063,20 +1067,37 @@ export async function updateColumnRuleSettings(
   return getSheetSnapshot(input.sheetId, actor);
 }
 
-export async function updateSheetColumnWidths(
+export async function updateSheetViewSettings(
   actor: Actor,
-  input: UpdateSheetColumnWidthsInput
+  input: UpdateSheetViewSettingsInput
 ): Promise<SheetViewSettingState> {
   if (actor.role !== Role.ADMIN) {
-    throw new SheetRuleError("Only admins can save column widths.", 403);
+    throw new SheetRuleError("Only admins can save sheet view settings.", 403);
   }
 
-  const columnWidths = normalizeSheetColumnWidths(input.columnWidths);
+  const columnWidths =
+    input.columnWidths === undefined
+      ? undefined
+      : normalizeSheetColumnWidths(input.columnWidths);
+  const condensedView =
+    input.condensedView === undefined
+      ? undefined
+      : normalizeSheetCondensedView(input.condensedView);
+  const frozenHeaderRowIndex =
+    input.frozenHeaderRowIndex === undefined
+      ? undefined
+      : normalizeSheetFrozenHeaderRowIndex(input.frozenHeaderRowIndex);
 
   await prisma.sheet.findUniqueOrThrow({
     where: { id: input.sheetId },
     select: { id: true }
   });
+
+  const updateData = {
+    ...(columnWidths === undefined ? {} : { columnWidths }),
+    ...(condensedView === undefined ? {} : { condensedView }),
+    ...(frozenHeaderRowIndex === undefined ? {} : { frozenHeaderRowIndex })
+  };
 
   const viewSetting = await prisma.sheetViewSetting.upsert({
     where: { sheetId: input.sheetId },
@@ -1086,15 +1107,20 @@ export async function updateSheetColumnWidths(
       alternateOddColor: DEFAULT_SHEET_VIEW_SETTING.alternateOddColor,
       alternateEvenColor: DEFAULT_SHEET_VIEW_SETTING.alternateEvenColor,
       fontSize: DEFAULT_SHEET_VIEW_SETTING.fontSize,
-      columnWidths
+      columnWidths: columnWidths ?? DEFAULT_SHEET_VIEW_SETTING.columnWidths,
+      condensedView: condensedView ?? DEFAULT_SHEET_VIEW_SETTING.condensedView,
+      frozenHeaderRowIndex:
+        frozenHeaderRowIndex ?? DEFAULT_SHEET_VIEW_SETTING.frozenHeaderRowIndex
     },
-    update: { columnWidths },
+    update: updateData,
     select: {
       alternateRowColors: true,
       alternateOddColor: true,
       alternateEvenColor: true,
       fontSize: true,
-      columnWidths: true
+      columnWidths: true,
+      condensedView: true,
+      frozenHeaderRowIndex: true
     }
   });
 
@@ -1107,7 +1133,11 @@ export async function updateSheetColumnWidths(
       normalizeHexColor(viewSetting.alternateEvenColor) ??
       DEFAULT_SHEET_VIEW_SETTING.alternateEvenColor,
     fontSize: normalizeSheetFontSize(viewSetting.fontSize),
-    columnWidths: normalizeSheetColumnWidths(viewSetting.columnWidths)
+    columnWidths: normalizeSheetColumnWidths(viewSetting.columnWidths),
+    condensedView: normalizeSheetCondensedView(viewSetting.condensedView),
+    frozenHeaderRowIndex: normalizeSheetFrozenHeaderRowIndex(
+      viewSetting.frozenHeaderRowIndex
+    )
   };
 }
 

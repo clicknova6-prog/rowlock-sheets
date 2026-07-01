@@ -11,7 +11,12 @@ import {
   updateFirebaseMemberPassword
 } from "@/lib/firebase/users";
 import { unlockRow } from "@/lib/sheet/service";
-import { normalizeHexColor, normalizeSheetFontSize } from "@/lib/sheet/formatting";
+import {
+  normalizeHexColor,
+  normalizeSheetCondensedView,
+  normalizeSheetFontSize,
+  normalizeSheetFrozenHeaderRowIndex
+} from "@/lib/sheet/formatting";
 import { parseRuleValues, toRuleOperator } from "@/lib/sheet/rules";
 import { parseAllowedValues } from "@/lib/sheet/validation";
 
@@ -268,6 +273,10 @@ export async function saveSheetViewSettingsAction(formData: FormData): Promise<v
   const alternateOddColor = normalizeHexColor(getString(formData, "alternateOddColor")) ?? "#ffffff";
   const alternateEvenColor = normalizeHexColor(getString(formData, "alternateEvenColor")) ?? "#f8fafc";
   const fontSize = normalizeSheetFontSize(getString(formData, "fontSize"));
+  const condensedView = normalizeSheetCondensedView(formData.get("condensedView"));
+  const frozenHeaderRowIndex = normalizeSheetFrozenHeaderRowIndex(
+    getString(formData, "frozenHeaderRowIndex")
+  );
 
   await prisma.$transaction(async (tx) => {
     await tx.sheetViewSetting.upsert({
@@ -277,13 +286,17 @@ export async function saveSheetViewSettingsAction(formData: FormData): Promise<v
         alternateRowColors,
         alternateOddColor,
         alternateEvenColor,
-        fontSize
+        fontSize,
+        condensedView,
+        frozenHeaderRowIndex
       },
       update: {
         alternateRowColors,
         alternateOddColor,
         alternateEvenColor,
-        fontSize
+        fontSize,
+        condensedView,
+        frozenHeaderRowIndex
       }
     });
 

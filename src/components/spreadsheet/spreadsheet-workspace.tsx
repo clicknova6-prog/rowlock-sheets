@@ -143,6 +143,7 @@ const LIVE_SYNC_ACK_TIMEOUT_MS = 300000;
 const REALTIME_SNAPSHOT_REFRESH_MS = 400;
 const DEFAULT_DATA_COLUMN_WIDTH = 230;
 const CELL_HORIZONTAL_PADDING_PX = 18;
+const CONDENSED_ROW_VERTICAL_PADDING_PX = 6;
 const SELECTION_AUTO_SCROLL_EDGE_PX = 56;
 const SELECTION_AUTO_SCROLL_MAX_PX = 28;
 const MAX_CELL_HISTORY_ENTRIES = 100;
@@ -477,6 +478,10 @@ function getResponsiveRowHeight(
   const minimumHeight = Math.max(34, fontSize * 2.4);
 
   return Math.min(260, Math.ceil(Math.max(minimumHeight, maxLines * lineHeight + 12)));
+}
+
+function getCondensedRowHeight(fontSize: number): number {
+  return Math.max(24, Math.ceil(fontSize * 1.25 + CONDENSED_ROW_VERTICAL_PADDING_PX));
 }
 
 function parseClipboardGrid(text: string): string[][] {
@@ -1129,13 +1134,53 @@ export function SpreadsheetWorkspace({
       : pendingSaveCount > 0
         ? `${socketSyncEnabled ? "Live sync" : "Save"} queued for ${pendingSaveCount} cell${pendingSaveCount === 1 ? "" : "s"}.`
         : "Ready");
-  const rowHeight = useCallback(
-    (row: SheetGridRow) =>
-      getResponsiveRowHeight(row, snapshot.columns, snapshot.viewSetting.fontSize, columnWidths),
-    [columnWidths, snapshot.columns, snapshot.viewSetting.fontSize]
+  const frozenHeaderRow = useMemo(() => {
+    const rowIndex = snapshot.viewSetting.frozenHeaderRowIndex;
+
+    return rowIndex ? rows.find((row) => row.rowNumber === rowIndex) ?? null : null;
+  }, [rows, snapshot.viewSetting.frozenHeaderRowIndex]);
+  const gridRows = useMemo(
+    () =>
+      frozenHeaderRow
+        ? rows.filter((row) => row.rowNumber !== frozenHeaderRow.rowNumber)
+        : rows,
+    [frozenHeaderRow, rows]
   );
-  const persistColumnWidths = useCallback(async (
-    nextColumnWidths: Partial<Record<ColumnKey, number>>
+  const topSummaryRows = useMemo(
+    () => (frozenHeaderRow ? [frozenHeaderRow] : undefined),
+    [frozenHeaderRow]
+  );
+  const rowHeight = useMemo<number | ((row: SheetGridRow) => number)>(() => {
+    if (snapshot.viewSetting.condensedView) {
+      return getCondensedRowHeight(snapshot.viewSetting.fontSize);
+    }
+
+    return (row: SheetGridRow) =>
+      getResponsiveRowHeight(row, snapshot.columns, snapshot.viewSetting.fontSize, columnWidths);
+  }, [
+    columnWidths,
+    snapshot.columns,
+    snapshot.viewSetting.condensedView,
+    snapshot.viewSetting.fontSize
+  ]);
+  const summaryRowHeight = frozenHeaderRow
+    ? snapshot.viewSetting.condensedView
+      ? getCondensedRowHeight(snapshot.viewSetting.fontSize)
+      : getResponsiveRowHeight(
+          frozenHeaderRow,
+          snapshot.columns,
+          snapshot.viewSetting.fontSize,
+          columnWidths
+        )
+    : undefined;
+  const persistViewSettings = useCallback(async (
+    patch: Partial<
+      Pick<
+        SheetViewSettingState,
+        "columnWidths" | "condensedView" | "frozenHeaderRowIndex"
+      >
+    >,
+    successMessage: string
   ): Promise<void> => {
     if (demoMode || !isAdmin) {
       return;
@@ -1147,7 +1192,7 @@ export function SpreadsheetWorkspace({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           sheetId: latestSnapshotRef.current.sheet.id,
-          columnWidths: nextColumnWidths
+          ...patch
         })
       });
       const body = (await response.json().catch(() => null)) as {
@@ -1167,12 +1212,72 @@ export function SpreadsheetWorkspace({
 
       latestSnapshotRef.current = nextSnapshot;
       setSnapshot(nextSnapshot);
-      setMessage("Column widths saved.");
+      setMessage(successMessage);
       setError(null);
     } catch (saveError) {
-      setError(saveError instanceof Error ? saveError.message : "Column widths could not be saved.");
+      setError(
+        saveError instanceof Error
+          ? saveError.message
+          : "Sheet view settings could not be saved."
+      );
     }
   }, [demoMode, isAdmin]);
+  const persistColumnWidths = useCallback(async (
+    nextColumnWidths: Partial<Record<ColumnKey, number>>
+  ): Promise<void> => {
+    await persistViewSettings({ columnWidths: nextColumnWidths }, "Column widths saved.");
+  }, [persistViewSettings]);
+  const updateViewSetting = useCallback(async (
+    patch: Partial<Pick<SheetViewSettingState, "condensedView" | "frozenHeaderRowIndex">>,
+    successMessage: string
+  ): Promise<void> => {
+    const currentSnapshot = latestSnapshotRef.current;
+    const nextViewSetting = {
+      ...currentSnapshot.viewSetting,
+      ...patch
+    };
+    const nextSnapshot = {
+      ...currentSnapshot,
+      viewSetting: nextViewSetting
+    };
+
+    latestSnapshotRef.current = nextSnapshot;
+    setSnapshot(nextSnapshot);
+    setError(null);
+
+    if (demoMode) {
+      setMessage(`${successMessage} locally.`);
+      return;
+    }
+
+    await persistViewSettings(patch, successMessage);
+  }, [demoMode, persistViewSettings]);
+  const toggleCondensedView = useCallback(async (): Promise<void> => {
+    const nextCondensedView = !latestSnapshotRef.current.viewSetting.condensedView;
+
+    await updateViewSetting(
+      { condensedView: nextCondensedView },
+      nextCondensedView ? "Condensed view enabled" : "Condensed view disabled"
+    );
+  }, [updateViewSetting]);
+  const toggleSelectedRowHeader = useCallback(async (): Promise<void> => {
+    if (!selectedAdminRowIndex) {
+      setError(null);
+      setMessage("Select a row first.");
+      return;
+    }
+
+    const currentHeaderRowIndex = latestSnapshotRef.current.viewSetting.frozenHeaderRowIndex;
+    const nextHeaderRowIndex =
+      currentHeaderRowIndex === selectedAdminRowIndex ? null : selectedAdminRowIndex;
+
+    await updateViewSetting(
+      { frozenHeaderRowIndex: nextHeaderRowIndex },
+      nextHeaderRowIndex
+        ? `Row ${nextHeaderRowIndex} set as header row`
+        : "Header row cleared"
+    );
+  }, [selectedAdminRowIndex, updateViewSetting]);
   const handleColumnWidthsChange = useCallback((nextColumnWidths: ColumnWidths): void => {
     setColumnWidths(nextColumnWidths);
 
@@ -2151,7 +2256,10 @@ export function SpreadsheetWorkspace({
     };
   }, [blurActiveLiveCell]);
 
-  async function saveCell(nextRows: SheetGridRow[], data: RowsChangeData<SheetGridRow>) {
+  async function saveCell(
+    nextRows: SheetGridRow[],
+    data: RowsChangeData<SheetGridRow, SheetGridRow>
+  ) {
     const changedColumn = data.column.key;
 
     if (!isColumnKey(changedColumn, snapshot.columns)) {
@@ -2183,11 +2291,12 @@ export function SpreadsheetWorkspace({
     }
 
     const previousRows = rows;
+    const mergedNextRows = mergeRowsByNumber(rows, nextRows);
     const savedLabel =
       updates.length === 1 ? `${firstUpdate.columnKey}${firstUpdate.rowIndex}` : `${updates.length} cells`;
 
-    setRows(nextRows);
-    rowsRef.current = nextRows;
+    setRows(mergedNextRows);
+    rowsRef.current = mergedNextRows;
     setError(null);
     setMessage(null);
 
@@ -2224,7 +2333,10 @@ export function SpreadsheetWorkspace({
     queueCellUpdates(updates, `${savedLabel} changed.`);
   }
 
-  function handleRowsChange(nextRows: SheetGridRow[], data: RowsChangeData<SheetGridRow>) {
+  function handleRowsChange(
+    nextRows: SheetGridRow[],
+    data: RowsChangeData<SheetGridRow, SheetGridRow>
+  ) {
     startTransition(() => {
       void saveCell(nextRows, data);
     });
@@ -2833,10 +2945,10 @@ export function SpreadsheetWorkspace({
     };
   }, [locks, snapshot.columns, snapshot.currentUser.id]);
 
-  const renderers = useMemo<Renderers<SheetGridRow, unknown>>(() => ({
+  const renderers = useMemo<Renderers<SheetGridRow, SheetGridRow>>(() => ({
     renderRow(
       key: React.Key,
-      props: RenderRowProps<SheetGridRow, unknown>
+      props: RenderRowProps<SheetGridRow, SheetGridRow>
     ): React.ReactNode {
       const backgroundColor = getAlternateRowBackground(props.row, snapshot.viewSetting);
       const color = getReadableTextColorForBackground(backgroundColor);
@@ -2859,7 +2971,7 @@ export function SpreadsheetWorkspace({
     },
     renderCell(
       key: React.Key,
-      props: CellRendererProps<SheetGridRow, unknown>
+      props: CellRendererProps<SheetGridRow, SheetGridRow>
     ): React.ReactNode {
       const columnKey = props.column.key;
 
@@ -3215,7 +3327,7 @@ export function SpreadsheetWorkspace({
     column,
     onRowChange,
     onClose
-  }: RenderEditCellProps<SheetGridRow>) {
+  }: RenderEditCellProps<SheetGridRow, SheetGridRow>) {
     const columnKey = column.key;
     const value = isColumnKey(columnKey, snapshot.columns) ? String(row[columnKey] ?? "") : "";
 
@@ -3260,8 +3372,8 @@ export function SpreadsheetWorkspace({
     );
   }, [applyPastedText, snapshot.columns, startTransition]);
 
-  const columns = useMemo<Column<SheetGridRow>[]>(() => {
-    const rowColumn: Column<SheetGridRow> = {
+  const columns = useMemo<Column<SheetGridRow, SheetGridRow>[]>(() => {
+    const rowColumn: Column<SheetGridRow, SheetGridRow> = {
       key: "rowNumber",
       name: "#",
       frozen: true,
@@ -3269,13 +3381,18 @@ export function SpreadsheetWorkspace({
       minWidth: 64,
       renderCell: ({ row }) => (
         <div className="sheet-row-index text-right text-xs">{row.rowNumber}</div>
+      ),
+      renderSummaryCell: ({ row }) => (
+        <div className="sheet-row-index text-right text-xs font-semibold">
+          {row.rowNumber}
+        </div>
       )
     };
 
     return [
       rowColumn,
       ...snapshot.columns.map(
-        (columnKey): Column<SheetGridRow> => ({
+        (columnKey): Column<SheetGridRow, SheetGridRow> => ({
           key: columnKey,
           name: columnKey,
           width: DEFAULT_DATA_COLUMN_WIDTH,
@@ -3311,6 +3428,15 @@ export function SpreadsheetWorkspace({
                 "sheet-cell-range-anchor"
             );
           },
+          summaryCellClass: (row: SheetGridRow) =>
+            clsx(
+              "sheet-cell sheet-frozen-header-cell",
+              isCellInsideRange(row.rowNumber, columnKey, selectedRange, snapshot.columns) &&
+                "sheet-cell-range-selected",
+              selectedRange?.anchor.rowIndex === row.rowNumber &&
+                selectedRange.anchor.columnKey === columnKey &&
+                "sheet-cell-range-anchor"
+            ),
           renderCell: ({ row }) => {
             const lock = locks.get(getCellLockMapKey(row.rowNumber, columnKey));
             const lockedByOther = lock && lock.userId !== snapshot.currentUser.id;
@@ -3334,6 +3460,19 @@ export function SpreadsheetWorkspace({
                     {getUserInitials(lock.userId)}
                   </span>
                 ) : null}
+                {renderWrappedCellText(renderedValue)}
+              </div>
+            );
+          },
+          renderSummaryCell: ({ row }) => {
+            const renderedValue = getRenderedCellValue(row, columnKey);
+
+            return (
+              <div
+                className="sheet-cell-content"
+                style={getCellTextStyle(getCellFormat(row, columnKey))}
+                title={row.__formula[columnKey] ? row[columnKey] : undefined}
+              >
                 {renderWrappedCellText(renderedValue)}
               </div>
             );
@@ -3435,6 +3574,34 @@ export function SpreadsheetWorkspace({
             <span className="inline-flex h-9 items-center rounded-md border border-[color:var(--line)] px-2 font-mono text-xs text-[color:var(--text-muted)]">
               {selectedAddressLabel}
             </span>
+            <ToolbarTextButton
+              active={snapshot.viewSetting.condensedView}
+              title="Toggle compact sheet rows"
+              onClick={() =>
+                startTransition(() => {
+                  void toggleCondensedView();
+                })
+              }
+            >
+              <Rows3 size={14} />
+              Condensed
+            </ToolbarTextButton>
+            <ToolbarTextButton
+              active={
+                Boolean(selectedAdminRowIndex) &&
+                snapshot.viewSetting.frozenHeaderRowIndex === selectedAdminRowIndex
+              }
+              disabled={!selectedAdminRowIndex}
+              title="Set or clear the selected row as the frozen sheet header"
+              onClick={() =>
+                startTransition(() => {
+                  void toggleSelectedRowHeader();
+                })
+              }
+            >
+              <Rows3 size={14} />
+              Header row {snapshot.viewSetting.frozenHeaderRowIndex ?? "--"}
+            </ToolbarTextButton>
             <FormatIconButton
               active={selectedFormat.bold}
               title="Bold"
@@ -3686,16 +3853,28 @@ export function SpreadsheetWorkspace({
         />
         <DataGrid
           ref={dataGridRef}
-          className={clsx("fill-grid", isRangeSelecting && "sheet-range-selecting")}
+          className={clsx(
+            "fill-grid",
+            snapshot.viewSetting.condensedView && "sheet-condensed-view",
+            isRangeSelecting && "sheet-range-selecting"
+          )}
           columns={columns}
           columnWidths={columnWidths}
           renderers={renderers}
           rowHeight={rowHeight}
-          rows={rows}
+          rows={gridRows}
+          topSummaryRows={topSummaryRows}
+          summaryRowHeight={summaryRowHeight}
           style={
             {
               "--rdg-font-size": `${snapshot.viewSetting.fontSize}px`,
-              "--sheet-font-size": `${snapshot.viewSetting.fontSize}px`
+              "--sheet-font-size": `${snapshot.viewSetting.fontSize}px`,
+              "--sheet-cell-padding-y": snapshot.viewSetting.condensedView
+                ? "1px"
+                : undefined,
+              "--sheet-cell-line-height": snapshot.viewSetting.condensedView
+                ? "1.15"
+                : undefined
             } as CSSProperties
           }
           onColumnWidthsChange={handleColumnWidthsChange}

@@ -160,7 +160,7 @@ option {
   display: flex;
   align-items: flex-start;
   min-width: 0;
-  padding-block: max(4px, calc(var(--sheet-font-size, 14px) * 0.28));
+  padding-block: var(--sheet-cell-padding-y, max(4px, calc(var(--sheet-font-size, 14px) * 0.28)));
   font-size: var(--sheet-font-size, inherit);
 }
 
@@ -172,7 +172,27 @@ option {
   min-width: 0;
   overflow-wrap: anywhere;
   white-space: pre-wrap;
-  line-height: 1.35;
+  line-height: var(--sheet-cell-line-height, 1.35);
+}
+
+.sheet-condensed-view .sheet-cell-content {
+  overflow: hidden;
+}
+
+.rdg .rdg-top-summary-row {
+  background-color: var(--panel-muted);
+  color: var(--text);
+  font-weight: 600;
+}
+
+.rdg .rdg-top-summary-row > .rdg-cell {
+  background-color: inherit;
+  border-block-end-color: var(--grid-line-strong);
+  border-inline-end-color: var(--grid-line-strong);
+}
+
+.sheet-frozen-header-cell {
+  background-color: var(--panel-muted);
 }
 
 .sheet-cell-word {

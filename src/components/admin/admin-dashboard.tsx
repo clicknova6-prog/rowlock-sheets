@@ -22,7 +22,7 @@ import {
 import { CreateMemberForm } from "@/components/admin/create-member-form";
 import { MemberManagement } from "@/components/admin/member-management";
 import { RuleOperator } from "@/generated/prisma/enums";
-import { COLUMN_KEYS } from "@/lib/constants";
+import { COLUMN_KEYS, MAX_ROWS } from "@/lib/constants";
 import type {
   AdminMemberState,
   ConditionalRuleState,
@@ -445,6 +445,15 @@ export function AdminDashboard({
                 />
                 Alternating row colors
               </label>
+              <label className="flex items-center gap-2 text-sm font-medium">
+                <input
+                  className="h-4 w-4 accent-[color:var(--accent)]"
+                  defaultChecked={snapshot.viewSetting.condensedView}
+                  name="condensedView"
+                  type="checkbox"
+                />
+                Condensed view
+              </label>
               <div className="grid gap-3 sm:grid-cols-3">
                 <label>
                   <FieldLabel>Odd rows</FieldLabel>
@@ -470,6 +479,18 @@ export function AdminDashboard({
                     type="number"
                   />
                   <HelpText>Applies to every cell in the sheet.</HelpText>
+                </label>
+                <label>
+                  <FieldLabel>Header row</FieldLabel>
+                  <TextInput
+                    defaultValue={snapshot.viewSetting.frozenHeaderRowIndex ?? ""}
+                    max={MAX_ROWS}
+                    min={1}
+                    name="frozenHeaderRowIndex"
+                    placeholder="No frozen row"
+                    type="number"
+                  />
+                  <HelpText>This row stays pinned while members scroll.</HelpText>
                 </label>
               </div>
               <ActionButton>

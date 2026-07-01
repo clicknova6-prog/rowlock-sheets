@@ -1,4 +1,4 @@
-import { COLUMN_KEYS } from "@/lib/constants";
+import { COLUMN_KEYS, MAX_ROWS } from "@/lib/constants";
 import type { ColumnKey } from "@/lib/constants";
 import type {
   CellFormatPatch,
@@ -26,7 +26,9 @@ export const DEFAULT_SHEET_VIEW_SETTING: SheetViewSettingState = {
   alternateOddColor: "#ffffff",
   alternateEvenColor: "#f8fafc",
   fontSize: 14,
-  columnWidths: {}
+  columnWidths: {},
+  condensedView: false,
+  frozenHeaderRowIndex: null
 };
 
 const HEX_COLOR_PATTERN = /^#[0-9a-f]{6}$/i;
@@ -93,6 +95,24 @@ export function normalizeSheetColumnWidths(
   }
 
   return widths;
+}
+
+export function normalizeSheetCondensedView(value: unknown): boolean {
+  return value === true || value === "true" || value === "1" || value === "on";
+}
+
+export function normalizeSheetFrozenHeaderRowIndex(value: unknown): number | null {
+  if (value === null || value === undefined || value === "") {
+    return null;
+  }
+
+  const rowIndex = Number.parseInt(String(value), 10);
+
+  if (!Number.isInteger(rowIndex) || rowIndex < 1 || rowIndex > MAX_ROWS) {
+    return null;
+  }
+
+  return rowIndex;
 }
 
 export function normalizeHorizontalAlign(value: unknown): HorizontalAlign | null {

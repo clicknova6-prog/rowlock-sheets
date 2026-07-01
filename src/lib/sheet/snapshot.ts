@@ -7,6 +7,8 @@ import {
   normalizeHexColor,
   normalizeHorizontalAlign,
   normalizeSheetColumnWidths,
+  normalizeSheetCondensedView,
+  normalizeSheetFrozenHeaderRowIndex,
   normalizeSheetFontSize
 } from "./formatting";
 import { getCellEditDecision } from "./permissions";
@@ -254,7 +256,9 @@ export async function getSheetSnapshot(
         alternateOddColor: true,
         alternateEvenColor: true,
         fontSize: true,
-        columnWidths: true
+        columnWidths: true,
+        condensedView: true,
+        frozenHeaderRowIndex: true
       }
     }),
     prisma.validationRule.findMany({
@@ -413,7 +417,11 @@ export async function getSheetSnapshot(
         normalizeHexColor(viewSetting?.alternateEvenColor) ??
         DEFAULT_SHEET_VIEW_SETTING.alternateEvenColor,
       fontSize: normalizeSheetFontSize(viewSetting?.fontSize),
-      columnWidths: normalizeSheetColumnWidths(viewSetting?.columnWidths)
+      columnWidths: normalizeSheetColumnWidths(viewSetting?.columnWidths),
+      condensedView: normalizeSheetCondensedView(viewSetting?.condensedView),
+      frozenHeaderRowIndex: normalizeSheetFrozenHeaderRowIndex(
+        viewSetting?.frozenHeaderRowIndex
+      )
     },
     columnPermissions: permissions,
     validationRules: validationRules.map(mapValidationRule),
