@@ -209,6 +209,78 @@ function getRenderedCellValue(row: SheetGridRow, columnKey: ColumnKey): string {
     : String(row[columnKey] ?? "");
 }
 
+function getRowCellUpdatedAt(row: SheetGridRow, columnKey: ColumnKey): string | null {
+  return row.__cellUpdatedAt?.[columnKey] ?? null;
+}
+
+function getRowCellDecisionSource(
+  row: SheetGridRow,
+  columnKey: ColumnKey
+): NonNullable<Parameters<typeof getCellEditDecision>[0]["delaySourceCell"]> {
+  const value = getRawCellValue(row, columnKey);
+
+  return {
+    value: row.__formula[columnKey] ? "" : value,
+    formula: row.__formula[columnKey] ? value : null,
+    updatedAt: getRowCellUpdatedAt(row, columnKey)
+  };
+}
+
+function getTimestampMs(value: Date | string | null | undefined): number | null {
+  if (value instanceof Date) {
+    return Number.isFinite(value.getTime()) ? value.getTime() : null;
+  }
+
+  if (!value) {
+    return null;
+  }
+
+  const timestamp = new Date(value).getTime();
+
+  return Number.isFinite(timestamp) ? timestamp : null;
+}
+
+function getNextMemberDelayUnlockAt(snapshot: SheetSnapshot): number | null {
+  if (snapshot.currentUser.role === Role.ADMIN) {
+    return null;
+  }
+
+  const now = Date.now();
+  let nextUnlockAt: number | null = null;
+
+  for (const permission of snapshot.columnPermissions) {
+    const sourceColumnKey = permission.memberEditDelaySourceColumnKey;
+    const delayMinutes = Math.max(0, permission.memberEditDelayMinutes);
+
+    if (!permission.editableByMember || !sourceColumnKey || delayMinutes <= 0) {
+      continue;
+    }
+
+    for (const row of snapshot.rows) {
+      if (row.__editable[permission.columnKey]) {
+        continue;
+      }
+
+      const sourceValue = getRawCellValue(row, sourceColumnKey).trim();
+      const sourceUpdatedAt = getTimestampMs(getRowCellUpdatedAt(row, sourceColumnKey));
+
+      if (!sourceValue || !sourceUpdatedAt) {
+        continue;
+      }
+
+      const unlockAt = sourceUpdatedAt + delayMinutes * 60_000;
+
+      if (unlockAt <= now) {
+        continue;
+      }
+
+      nextUnlockAt = nextUnlockAt === null ? unlockAt : Math.min(nextUnlockAt, unlockAt);
+    }
+  }
+
+  return nextUnlockAt;
+}
+
 function getSafeLinkHref(value: string): string | null {
   const trimmedValue = value.trim();
   const href = trimmedValue.toLowerCase().startsWith("www.")
@@ -895,6 +967,9 @@ function recomputeRowsForCurrentUser(
     const lockReason = { ...row.__lockReason };
 
     for (const columnKey of snapshot.columns) {
+      const permission = snapshot.columnPermissions.find(
+        (item) => item.columnKey === columnKey
+      );
       const decision = getCellEditDecision({
         role: snapshot.currentUser.role,
         userId: snapshot.currentUser.id,
@@ -902,6 +977,9 @@ function recomputeRowsForCurrentUser(
         columnPermissions: snapshot.columnPermissions,
         ownership,
         currentValue: getRawCellValue(row, columnKey),
+        delaySourceCell: permission?.memberEditDelaySourceColumnKey
+          ? getRowCellDecisionSource(row, permission.memberEditDelaySourceColumnKey)
+          : null,
         memberEditLockAt: snapshot.viewSetting.memberEditLockAt
       });
 
@@ -1533,6 +1611,42 @@ export function SpreadsheetWorkspace({
       window.clearTimeout(lockTimer);
     };
   }, [snapshot.currentUser.role, snapshot.viewSetting.memberEditLockAt]);
+
+  useEffect(() => {
+    const nextUnlockAt = getNextMemberDelayUnlockAt(snapshot);
+
+    if (nextUnlockAt === null) {
+      return;
+    }
+
+    const delay = Math.max(0, nextUnlockAt - Date.now()) + 250;
+    const unlockTimer = window.setTimeout(() => {
+      const currentSnapshot = latestSnapshotRef.current;
+      const nextRows = recomputeRowsForCurrentUser(currentSnapshot.rows, currentSnapshot);
+      const nextSnapshot = {
+        ...currentSnapshot,
+        rows: nextRows
+      };
+      const optimisticUpdates = [
+        ...inFlightUpdatesRef.current.values(),
+        ...saveQueueRef.current.values()
+      ];
+      const visibleRows =
+        optimisticUpdates.length > 0
+          ? applyUpdatesToRows(nextRows, optimisticUpdates)
+          : nextRows;
+
+      latestSnapshotRef.current = nextSnapshot;
+      rowsRef.current = visibleRows;
+      setRows(visibleRows);
+      setSnapshot(nextSnapshot);
+      setError(null);
+    }, delay);
+
+    return () => {
+      window.clearTimeout(unlockTimer);
+    };
+  }, [snapshot]);
 
   useEffect(() => {
     function warnBeforeUnload(event: BeforeUnloadEvent): void {

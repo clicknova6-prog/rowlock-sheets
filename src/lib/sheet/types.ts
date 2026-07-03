@@ -114,6 +114,7 @@ export interface SheetGridRow {
   updatedAt: string | null;
   __computed: Record<ColumnKey, string>;
   __formula: Record<ColumnKey, boolean>;
+  __cellUpdatedAt: Partial<Record<ColumnKey, string>>;
   __editable: Record<ColumnKey, boolean>;
   __lockReason: Record<ColumnKey, string | null>;
   __format: Record<ColumnKey, CellFormatState>;

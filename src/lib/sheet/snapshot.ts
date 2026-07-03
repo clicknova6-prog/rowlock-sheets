@@ -114,6 +114,20 @@ function buildFormatColumnRecord(): Record<(typeof COLUMN_KEYS)[number], CellFor
   ) as Record<(typeof COLUMN_KEYS)[number], CellFormatState>;
 }
 
+function serializeCellUpdatedAt(value: Date | string | null | undefined): string | undefined {
+  if (value instanceof Date) {
+    return Number.isFinite(value.getTime()) ? value.toISOString() : undefined;
+  }
+
+  if (!value) {
+    return undefined;
+  }
+
+  const date = new Date(value);
+
+  return Number.isFinite(date.getTime()) ? date.toISOString() : undefined;
+}
+
 function getDuplicateHighlightedRows(
   cellLookup: Map<string, CellState>,
   permissions: ColumnPermissionState[]
@@ -360,6 +374,7 @@ export async function getSheetSnapshot(
     const values = buildEmptyColumnRecord();
     const computed = buildEmptyColumnRecord();
     const formulas = buildBooleanColumnRecord();
+    const cellUpdatedAt: Partial<Record<ColumnKey, string>> = {};
     const editable = buildBooleanColumnRecord();
     const lockReason = buildNullableColumnRecord();
     const format = buildFormatColumnRecord();
@@ -372,6 +387,12 @@ export async function getSheetSnapshot(
       computed[columnKey] = cell?.computedValue ?? cell?.value ?? "";
       formulas[columnKey] = Boolean(cell?.formula);
       format[columnKey] = cellFormat ?? createDefaultCellFormat();
+
+      const updatedAt = serializeCellUpdatedAt(cell?.updatedAt);
+
+      if (updatedAt) {
+        cellUpdatedAt[columnKey] = updatedAt;
+      }
 
       const permission = permissions.find((item) => item.columnKey === columnKey);
       const delaySourceCell = permission?.memberEditDelaySourceColumnKey
@@ -402,6 +423,7 @@ export async function getSheetSnapshot(
       updatedAt: rowMeta?.updatedAt ?? ownership?.updatedAt ?? null,
       __computed: computed,
       __formula: formulas,
+      __cellUpdatedAt: cellUpdatedAt,
       __editable: editable,
       __lockReason: lockReason,
       __format: format,

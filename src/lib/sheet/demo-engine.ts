@@ -64,7 +64,7 @@ function cellsFromSnapshot(snapshot: SheetSnapshot): CellState[] {
           value: row.__formula[columnKey] ? "" : value,
           formula: row.__formula[columnKey] ? value : null,
           computedValue: row.__computed[columnKey],
-          updatedAt: row.updatedAt ?? new Date(0).toISOString()
+          updatedAt: row.__cellUpdatedAt?.[columnKey] ?? row.updatedAt ?? new Date(0).toISOString()
         });
       }
     }
@@ -202,6 +202,7 @@ export function buildRowsFromCells(
     const values = emptyStringColumns();
     const computed = emptyStringColumns();
     const formulas = emptyBooleanColumns();
+    const cellUpdatedAt: Partial<Record<ColumnKey, string>> = {};
     const editable = emptyBooleanColumns();
     const lockReason = emptyNullableColumns();
     const format = emptyFormatColumns();
@@ -214,6 +215,14 @@ export function buildRowsFromCells(
       computed[columnKey] = cell?.computedValue ?? cell?.value ?? "";
       formulas[columnKey] = Boolean(cell?.formula);
       format[columnKey] = cellFormat ?? createDefaultCellFormat();
+
+      if (cell?.updatedAt) {
+        const timestamp = new Date(cell.updatedAt).getTime();
+
+        if (Number.isFinite(timestamp)) {
+          cellUpdatedAt[columnKey] = new Date(timestamp).toISOString();
+        }
+      }
 
       const permission = snapshot.columnPermissions.find((item) => item.columnKey === columnKey);
       const delaySourceCell = permission?.memberEditDelaySourceColumnKey
@@ -242,6 +251,7 @@ export function buildRowsFromCells(
       updatedAt: ownership?.updatedAt ?? null,
       __computed: computed,
       __formula: formulas,
+      __cellUpdatedAt: cellUpdatedAt,
       __editable: editable,
       __lockReason: lockReason,
       __format: format,
