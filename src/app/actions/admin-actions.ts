@@ -10,7 +10,8 @@ import {
   deleteFirebaseMember,
   updateFirebaseMemberPassword
 } from "@/lib/firebase/users";
-import { unlockRow } from "@/lib/sheet/service";
+import { parseRowIndexList } from "@/lib/sheet/row-index-list";
+import { resetRows, unlockRow, unlockRows } from "@/lib/sheet/service";
 import {
   normalizeHexColor,
   normalizeSheetCondensedView,
@@ -56,6 +57,16 @@ function parseMatchHighlightTerms(value: string): string[] {
   } catch {
     return [];
   }
+}
+
+function parseDelayMinutes(value: string): number {
+  const minutes = Number.parseInt(value, 10);
+
+  if (!Number.isFinite(minutes) || minutes <= 0) {
+    return 0;
+  }
+
+  return Math.min(1440, minutes);
 }
 
 function validatePassword(password: string): string | null {
@@ -231,18 +242,32 @@ export async function deleteMemberAction(
 export async function saveColumnPermissionsAction(formData: FormData): Promise<void> {
   const actor = await requireAdmin();
   const sheetId = getString(formData, "sheetId");
-  const permissions = COLUMN_KEYS.map((columnKey) => ({
-    sheetId,
-    columnKey,
-    editableByMember: formData.has(`permission-${columnKey}`),
-    claimRowOnEdit:
-      formData.has(`permission-${columnKey}`) && formData.has(`claimRow-${columnKey}`),
-    memberWriteOnce: formData.has(`writeOnce-${columnKey}`),
-    duplicateHighlight: formData.has(`duplicateHighlight-${columnKey}`),
-    matchHighlightTerms: parseMatchHighlightTerms(
-      getString(formData, `matchHighlightTerms-${columnKey}`)
-    )
-  }));
+  const permissions = COLUMN_KEYS.map((columnKey) => {
+    const editableByMember = formData.has(`permission-${columnKey}`);
+    const delayMinutes = parseDelayMinutes(getString(formData, `delayMinutes-${columnKey}`));
+    const rawDelaySourceColumnKey = getString(formData, `delaySource-${columnKey}`);
+    const memberEditDelaySourceColumnKey =
+      editableByMember &&
+      delayMinutes > 0 &&
+      rawDelaySourceColumnKey &&
+      rawDelaySourceColumnKey !== columnKey
+        ? assertColumnKey(rawDelaySourceColumnKey)
+        : null;
+
+    return {
+      sheetId,
+      columnKey,
+      editableByMember,
+      claimRowOnEdit: editableByMember && formData.has(`claimRow-${columnKey}`),
+      memberWriteOnce: formData.has(`writeOnce-${columnKey}`),
+      memberEditDelaySourceColumnKey,
+      memberEditDelayMinutes: memberEditDelaySourceColumnKey ? delayMinutes : 0,
+      duplicateHighlight: formData.has(`duplicateHighlight-${columnKey}`),
+      matchHighlightTerms: parseMatchHighlightTerms(
+        getString(formData, `matchHighlightTerms-${columnKey}`)
+      )
+    };
+  });
 
   await prisma.$transaction(
     async (tx) => {
@@ -571,5 +596,31 @@ export async function deleteOldAuditHistoryAction(formData: FormData): Promise<v
     }
   });
 
+  refreshApp();
+}
+
+export async function unlockRowsAction(formData: FormData): Promise<void> {
+  const actor = await requireAdmin();
+  const sheetId = getString(formData, "sheetId");
+  const { rowIndexes } = parseRowIndexList(getString(formData, "rowNumbers"), 500);
+
+  if (rowIndexes.length === 0) {
+    return;
+  }
+
+  await unlockRows(actor, sheetId, rowIndexes);
+  refreshApp();
+}
+
+export async function resetRowsAction(formData: FormData): Promise<void> {
+  const actor = await requireAdmin();
+  const sheetId = getString(formData, "sheetId");
+  const { rowIndexes } = parseRowIndexList(getString(formData, "rowNumbers"), 500);
+
+  if (rowIndexes.length === 0) {
+    return;
+  }
+
+  await resetRows(actor, sheetId, rowIndexes);
   refreshApp();
 }

@@ -9,6 +9,12 @@ export interface CellEditDecisionInput {
   columnPermissions: ColumnPermissionState[];
   ownership?: RowOwnershipState | null;
   currentValue?: string | null;
+  delaySourceCell?: {
+    value?: string | null;
+    formula?: string | null;
+    updatedAt?: Date | string | null;
+  } | null;
+  now?: Date;
 }
 
 export interface CellEditDecision {
@@ -16,6 +22,59 @@ export interface CellEditDecision {
   reason: string | null;
   willClaimRow: boolean;
   state: "editable" | "admin" | "admin-only" | "owned-by-you" | "owned-by-other";
+}
+
+function getCellRawValue(cell: CellEditDecisionInput["delaySourceCell"]): string {
+  return String(cell?.formula ?? cell?.value ?? "").trim();
+}
+
+function getDelayTimestamp(value: Date | string | null | undefined): number | null {
+  if (value instanceof Date) {
+    return Number.isFinite(value.getTime()) ? value.getTime() : null;
+  }
+
+  if (!value) {
+    return null;
+  }
+
+  const timestamp = new Date(value).getTime();
+
+  return Number.isFinite(timestamp) ? timestamp : null;
+}
+
+function getMemberDelayBlockReason(
+  permission: ColumnPermissionState,
+  input: CellEditDecisionInput
+): string | null {
+  const sourceColumnKey = permission.memberEditDelaySourceColumnKey;
+  const delayMinutes = Math.max(0, permission.memberEditDelayMinutes);
+
+  if (!sourceColumnKey || delayMinutes <= 0) {
+    return null;
+  }
+
+  if (!getCellRawValue(input.delaySourceCell)) {
+    return `Column ${input.columnKey} opens after column ${sourceColumnKey} has a value.`;
+  }
+
+  const sourceUpdatedAt = getDelayTimestamp(input.delaySourceCell?.updatedAt);
+
+  if (!sourceUpdatedAt) {
+    return `Column ${input.columnKey} opens after column ${sourceColumnKey} is saved.`;
+  }
+
+  const now = input.now?.getTime() ?? Date.now();
+  const opensAt = sourceUpdatedAt + delayMinutes * 60_000;
+
+  if (now < opensAt) {
+    const minutesRemaining = Math.max(1, Math.ceil((opensAt - now) / 60_000));
+
+    return `Column ${input.columnKey} opens in ${minutesRemaining} minute${
+      minutesRemaining === 1 ? "" : "s"
+    } after column ${sourceColumnKey}.`;
+  }
+
+  return null;
 }
 
 export function getCellEditDecision(input: CellEditDecisionInput): CellEditDecision {
@@ -56,6 +115,17 @@ export function getCellEditDecision(input: CellEditDecisionInput): CellEditDecis
       reason: `This row is owned by ${input.ownership.ownerName ?? "another member"}.`,
       willClaimRow: false,
       state: "owned-by-other"
+    };
+  }
+
+  const delayBlockReason = getMemberDelayBlockReason(permission, input);
+
+  if (delayBlockReason) {
+    return {
+      allowed: false,
+      reason: delayBlockReason,
+      willClaimRow: false,
+      state: "admin-only"
     };
   }
 

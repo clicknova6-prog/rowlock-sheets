@@ -63,7 +63,8 @@ function cellsFromSnapshot(snapshot: SheetSnapshot): CellState[] {
           columnKey,
           value: row.__formula[columnKey] ? "" : value,
           formula: row.__formula[columnKey] ? value : null,
-          computedValue: row.__computed[columnKey]
+          computedValue: row.__computed[columnKey],
+          updatedAt: row.updatedAt ?? new Date(0).toISOString()
         });
       }
     }
@@ -214,13 +215,18 @@ export function buildRowsFromCells(
       formulas[columnKey] = Boolean(cell?.formula);
       format[columnKey] = cellFormat ?? createDefaultCellFormat();
 
+      const permission = snapshot.columnPermissions.find((item) => item.columnKey === columnKey);
+      const delaySourceCell = permission?.memberEditDelaySourceColumnKey
+        ? cellLookup.get(getCellKey(rowIndex, permission.memberEditDelaySourceColumnKey))
+        : null;
       const decision = getCellEditDecision({
         role: snapshot.currentUser.role,
         userId: snapshot.currentUser.id,
         columnKey,
         columnPermissions: snapshot.columnPermissions,
         ownership,
-        currentValue: values[columnKey]
+        currentValue: values[columnKey],
+        delaySourceCell
       });
 
       editable[columnKey] = decision.allowed;
@@ -289,16 +295,25 @@ export function applyDemoCellUpdate(
 
   const ownerships = ownershipsFromSnapshot(snapshot);
   const ownership = ownerships.find((item) => item.rowIndex === rowIndex) ?? null;
-  const previousCell = cellsFromSnapshot(snapshot).find(
+  const snapshotCells = cellsFromSnapshot(snapshot);
+  const previousCell = snapshotCells.find(
     (cell) => cell.rowIndex === rowIndex && cell.columnKey === columnKey
   );
+  const cellLookup = new Map(
+    snapshotCells.map((cell) => [getCellKey(cell.rowIndex, cell.columnKey), cell])
+  );
+  const permission = snapshot.columnPermissions.find((item) => item.columnKey === columnKey);
+  const delaySourceCell = permission?.memberEditDelaySourceColumnKey
+    ? cellLookup.get(getCellKey(rowIndex, permission.memberEditDelaySourceColumnKey))
+    : null;
   const decision = getCellEditDecision({
     role: snapshot.currentUser.role,
     userId: snapshot.currentUser.id,
     columnKey,
     columnPermissions: snapshot.columnPermissions,
     ownership,
-    currentValue: previousCell?.formula ?? previousCell?.value ?? ""
+    currentValue: previousCell?.formula ?? previousCell?.value ?? "",
+    delaySourceCell
   });
 
   if (!decision.allowed) {
@@ -317,12 +332,14 @@ export function applyDemoCellUpdate(
   }
 
   const normalized = normalizeCellInput(value);
+  const now = new Date().toISOString();
   const editedCell: CellState = {
     rowIndex,
     columnKey,
     value: normalized.value,
     formula: normalized.formula,
-    computedValue: normalized.value
+    computedValue: normalized.value,
+    updatedAt: now
   };
   const nextCellsWithoutComputed = upsertCell(cellsFromSnapshot(snapshot), editedCell);
   const nextCells = mergeRecalculatedCells(
@@ -339,7 +356,6 @@ export function applyDemoCellUpdate(
     return { error: violations[0].message };
   }
 
-  const now = new Date().toISOString();
   const nextOwnerships =
     snapshot.currentUser.role === Role.MEMBER && !ownership
       ? [

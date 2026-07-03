@@ -10,6 +10,8 @@ const updateColumnRulesSchema = z.object({
   editableByMember: z.boolean(),
   claimRowOnEdit: z.boolean(),
   memberWriteOnce: z.boolean(),
+  memberEditDelaySourceColumnKey: z.string().length(1).nullable().optional(),
+  memberEditDelayMinutes: z.number().int().min(0).max(1440).optional(),
   duplicateHighlight: z.boolean(),
   matchHighlightTerms: z.array(z.string()).max(500).optional(),
   sourceClientId: z.string().min(1).max(128).optional()

@@ -1,5 +1,6 @@
 import {
   ClipboardList,
+  Clock3,
   KeyRound,
   Lock,
   LockOpen,
@@ -13,11 +14,13 @@ import {
   deleteConditionalRuleAction,
   deleteOldAuditHistoryAction,
   deleteValidationRuleAction,
+  resetRowsAction,
   saveColumnPermissionsAction,
   saveConditionalRuleAction,
   saveSheetViewSettingsAction,
   saveValidationRuleAction,
-  unlockRowAction
+  unlockRowAction,
+  unlockRowsAction
 } from "@/app/actions/admin-actions";
 import { CreateMemberForm } from "@/components/admin/create-member-form";
 import { MemberManagement } from "@/components/admin/member-management";
@@ -164,6 +167,8 @@ function PermissionTile({
   editableByMember,
   claimRowOnEdit,
   memberWriteOnce,
+  memberEditDelaySourceColumnKey,
+  memberEditDelayMinutes,
   duplicateHighlight,
   matchHighlightTerms
 }: {
@@ -171,6 +176,8 @@ function PermissionTile({
   editableByMember: boolean;
   claimRowOnEdit: boolean;
   memberWriteOnce: boolean;
+  memberEditDelaySourceColumnKey: string | null;
+  memberEditDelayMinutes: number;
   duplicateHighlight: boolean;
   matchHighlightTerms: string[];
 }) {
@@ -232,6 +239,39 @@ function PermissionTile({
             type="checkbox"
           />
           Yellow duplicates
+        </span>
+        <span className="grid gap-1 rounded-md border border-[color:var(--line)] p-2">
+          <span className="inline-flex items-center gap-1 text-[11px] font-semibold uppercase tracking-wide">
+            <Clock3 size={12} />
+            Timed edit
+          </span>
+          <span className="grid grid-cols-[1fr_68px] gap-1">
+            <select
+              aria-label={`Delay source for ${columnKey}`}
+              className="focus-ring h-8 min-w-0 rounded-md border border-[color:var(--line)] bg-[color:var(--panel)] px-2 text-xs"
+              defaultValue={memberEditDelaySourceColumnKey ?? ""}
+              name={`delaySource-${columnKey}`}
+            >
+              <option value="">No delay</option>
+              {COLUMN_KEYS.filter((sourceColumnKey) => sourceColumnKey !== columnKey).map(
+                (sourceColumnKey) => (
+                  <option key={sourceColumnKey} value={sourceColumnKey}>
+                    After {sourceColumnKey}
+                  </option>
+                )
+              )}
+            </select>
+            <input
+              aria-label={`Delay minutes for ${columnKey}`}
+              className="focus-ring h-8 min-w-0 rounded-md border border-[color:var(--line)] bg-[color:var(--panel)] px-2 text-xs"
+              defaultValue={memberEditDelayMinutes || ""}
+              max={1440}
+              min={0}
+              name={`delayMinutes-${columnKey}`}
+              placeholder="min"
+              type="number"
+            />
+          </span>
         </span>
         {matchHighlightTerms.length > 0 ? (
           <span className="text-[11px] text-red-700 dark:text-red-200">
@@ -447,6 +487,8 @@ export function AdminDashboard({
                     editableByMember={permission.editableByMember}
                     key={permission.columnKey}
                     matchHighlightTerms={permission.matchHighlightTerms}
+                    memberEditDelayMinutes={permission.memberEditDelayMinutes}
+                    memberEditDelaySourceColumnKey={permission.memberEditDelaySourceColumnKey}
                     memberWriteOnce={permission.memberWriteOnce}
                   />
                 ))}
@@ -675,18 +717,31 @@ export function AdminDashboard({
           </Section>
 
           <Section
-            description="When a member first edits a row, that row belongs to them. Unlock a row to let another member claim it."
+            description="When a member first edits a row, that row belongs to them. Unlock or reset one row, a list, or ranges like 4, 8-12."
             icon={<LockOpen size={18} />}
             title="Row Ownership"
           >
-            <form action={unlockRowAction} className="mb-4 grid grid-cols-[1fr_auto] gap-2">
-              <input name="sheetId" type="hidden" value={snapshot.sheet.id} />
-              <TextInput max={1000} min={1} name="rowIndex" placeholder="Row number" type="number" />
-              <ActionButton>
-                <LockOpen size={16} />
-                Unlock
-              </ActionButton>
-            </form>
+            <div className="mb-4 grid gap-3">
+              <form action={unlockRowsAction} className="grid gap-2 sm:grid-cols-[1fr_auto]">
+                <input name="sheetId" type="hidden" value={snapshot.sheet.id} />
+                <TextInput name="rowNumbers" placeholder="Rows to unlock: 4, 8-12, 20" />
+                <ActionButton>
+                  <LockOpen size={16} />
+                  Unlock rows
+                </ActionButton>
+              </form>
+              <form action={resetRowsAction} className="grid gap-2 sm:grid-cols-[1fr_auto]">
+                <input name="sheetId" type="hidden" value={snapshot.sheet.id} />
+                <TextInput name="rowNumbers" placeholder="Rows to reset: 4, 8-12, 20" />
+                <ActionButton variant="danger">
+                  <Trash2 size={16} />
+                  Reset rows
+                </ActionButton>
+              </form>
+              <HelpText>
+                Reset clears row ownership and member-editable columns for those rows.
+              </HelpText>
+            </div>
             <div className="max-h-[520px] overflow-auto rounded-md border border-[color:var(--line)]">
               <table className="w-full min-w-[360px] text-left text-sm">
                 <thead className="sticky top-0 bg-[color:var(--panel-muted)]">

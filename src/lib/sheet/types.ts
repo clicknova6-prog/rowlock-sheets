@@ -23,6 +23,8 @@ export interface ColumnPermissionState {
   editableByMember: boolean;
   claimRowOnEdit: boolean;
   memberWriteOnce: boolean;
+  memberEditDelaySourceColumnKey: ColumnKey | null;
+  memberEditDelayMinutes: number;
   duplicateHighlight: boolean;
   matchHighlightTerms: string[];
 }
@@ -40,6 +42,7 @@ export interface CellState {
   value: string;
   formula?: string | null;
   computedValue?: string | null;
+  updatedAt?: Date | string | null;
 }
 
 export type HorizontalAlign = "left" | "center" | "right";

@@ -162,6 +162,8 @@ model ColumnPermission {
   editableByMember   Boolean  @default(false)
   claimRowOnEdit     Boolean  @default(false)
   memberWriteOnce    Boolean  @default(false)
+  memberEditDelaySourceColumnKey String? @db.VarChar(1)
+  memberEditDelayMinutes         Int     @default(0)
   duplicateHighlight Boolean  @default(false)
   matchHighlightTerms Json?
   createdAt          DateTime @default(now())

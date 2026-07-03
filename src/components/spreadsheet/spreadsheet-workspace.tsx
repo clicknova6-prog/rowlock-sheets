@@ -19,6 +19,7 @@ import {
   Italic,
   Lock,
   LockKeyhole,
+  LockOpen,
   PaintBucket,
   Palette,
   Rows3,
@@ -56,6 +57,7 @@ import { useSheetPresence } from "@/hooks/useSheetPresence";
 import { useSheetRealtime } from "@/hooks/useSheetRealtime";
 import { FORMAT_COLOR_PALETTE, createDefaultCellFormat } from "@/lib/sheet/formatting";
 import { getCellEditDecision } from "@/lib/sheet/permissions";
+import { parseRowIndexList } from "@/lib/sheet/row-index-list";
 import type { SheetRealtimeEvent } from "@/lib/sheet/realtime-types";
 import type {
   CellChangedPayload,
@@ -2691,7 +2693,12 @@ export function SpreadsheetWorkspace({
     patch: Partial<
       Pick<
         NonNullable<typeof selectedColumnPermission>,
-        "claimRowOnEdit" | "duplicateHighlight" | "matchHighlightTerms" | "memberWriteOnce"
+        | "claimRowOnEdit"
+        | "duplicateHighlight"
+        | "matchHighlightTerms"
+        | "memberEditDelayMinutes"
+        | "memberEditDelaySourceColumnKey"
+        | "memberWriteOnce"
       >
     >
   ): Promise<void> => {
@@ -2719,6 +2726,12 @@ export function SpreadsheetWorkspace({
         editableByMember: selectedColumnPermission.editableByMember,
         claimRowOnEdit: patch.claimRowOnEdit ?? selectedColumnPermission.claimRowOnEdit,
         memberWriteOnce: patch.memberWriteOnce ?? selectedColumnPermission.memberWriteOnce,
+        memberEditDelaySourceColumnKey:
+          patch.memberEditDelaySourceColumnKey ??
+          selectedColumnPermission.memberEditDelaySourceColumnKey,
+        memberEditDelayMinutes:
+          patch.memberEditDelayMinutes ??
+          selectedColumnPermission.memberEditDelayMinutes,
         duplicateHighlight:
           patch.duplicateHighlight ?? selectedColumnPermission.duplicateHighlight,
         matchHighlightTerms:
@@ -2793,6 +2806,81 @@ export function SpreadsheetWorkspace({
     demoMode,
     flushQueuedCellUpdates,
     selectedAdminRowIndex,
+    snapshot.sheet.id
+  ]);
+
+  const updateRowsByNumberList = useCallback(async (
+    mode: "reset" | "unlock"
+  ): Promise<void> => {
+    if (demoMode) {
+      setMessage(`${mode === "reset" ? "Row reset" : "Row unlock"} is saved in live mode.`);
+      return;
+    }
+
+    const input = window.prompt(
+      `Enter row numbers to ${mode}. Use commas, spaces, or ranges like 4, 8-12.`
+    );
+
+    if (input === null) {
+      return;
+    }
+
+    const { rowIndexes, invalidTokens } = parseRowIndexList(input, 500);
+
+    if (invalidTokens.length > 0) {
+      setError(`Invalid row number${invalidTokens.length === 1 ? "" : "s"}: ${invalidTokens.join(", ")}`);
+      return;
+    }
+
+    if (rowIndexes.length === 0) {
+      setError("Enter at least one row number.");
+      return;
+    }
+
+    if (
+      mode === "reset" &&
+      !window.confirm(`Reset ${rowIndexes.length} row${rowIndexes.length === 1 ? "" : "s"}?`)
+    ) {
+      return;
+    }
+
+    await flushQueuedCellUpdates();
+    setError(null);
+    setMessage(
+      mode === "reset"
+        ? `Resetting ${rowIndexes.length} row${rowIndexes.length === 1 ? "" : "s"}...`
+        : `Unlocking ${rowIndexes.length} row${rowIndexes.length === 1 ? "" : "s"}...`
+    );
+
+    const response = await fetch(`/api/rows/${mode}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sheetId: snapshot.sheet.id,
+        rowIndexes,
+        sourceClientId: clientInstanceIdRef.current
+      })
+    });
+    const body = (await response.json().catch(() => null)) as {
+      snapshot?: SheetSnapshot;
+      error?: string;
+    } | null;
+
+    if (!response.ok || !body?.snapshot) {
+      setError(body?.error ?? `Rows could not be ${mode === "reset" ? "reset" : "unlocked"}.`);
+      return;
+    }
+
+    applyServerSnapshot(body.snapshot);
+    setMessage(
+      mode === "reset"
+        ? `Reset ${rowIndexes.length} row${rowIndexes.length === 1 ? "" : "s"}.`
+        : `Unlocked ${rowIndexes.length} row${rowIndexes.length === 1 ? "" : "s"}.`
+    );
+  }, [
+    applyServerSnapshot,
+    demoMode,
+    flushQueuedCellUpdates,
     snapshot.sheet.id
   ]);
 
@@ -3902,6 +3990,28 @@ export function SpreadsheetWorkspace({
             >
               <Eraser size={14} />
               Reset row {selectedAdminRowIndex ?? "--"}
+            </ToolbarTextButton>
+            <ToolbarTextButton
+              title="Unlock multiple rows by number"
+              onClick={() =>
+                startTransition(() => {
+                  void updateRowsByNumberList("unlock");
+                })
+              }
+            >
+              <LockOpen size={14} />
+              Unlock rows
+            </ToolbarTextButton>
+            <ToolbarTextButton
+              title="Reset multiple rows by number"
+              onClick={() =>
+                startTransition(() => {
+                  void updateRowsByNumberList("reset");
+                })
+              }
+            >
+              <Eraser size={14} />
+              Reset rows
             </ToolbarTextButton>
             <ToolbarTextButton
               title="Unlock all rows"

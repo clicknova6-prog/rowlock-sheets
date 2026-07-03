@@ -2,13 +2,14 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { getCurrentUser } from "@/lib/auth/session";
 import { publishSheetRealtimeEvent } from "@/lib/firebase/sheet-realtime";
-import { SheetRuleError, unlockRow } from "@/lib/sheet/service";
+import { SheetRuleError, unlockRows } from "@/lib/sheet/service";
 
 const unlockSchema = z.object({
   sheetId: z.string().min(1),
-  rowIndex: z.number().int().min(1).max(1000),
+  rowIndex: z.number().int().min(1).max(1000).optional(),
+  rowIndexes: z.array(z.number().int().min(1).max(1000)).min(1).max(500).optional(),
   sourceClientId: z.string().min(1).max(128).optional()
-});
+}).refine((payload) => payload.rowIndex !== undefined || payload.rowIndexes !== undefined);
 
 export async function POST(request: Request): Promise<NextResponse> {
   const user = await getCurrentUser();
@@ -19,14 +20,15 @@ export async function POST(request: Request): Promise<NextResponse> {
 
   try {
     const payload = unlockSchema.parse(await request.json());
-    const snapshot = await unlockRow(user, payload.sheetId, payload.rowIndex);
+    const rowIndexes = payload.rowIndexes ?? [payload.rowIndex!];
+    const snapshot = await unlockRows(user, payload.sheetId, rowIndexes);
 
     await publishSheetRealtimeEvent({
       type: "row-unlocked",
       sheetId: payload.sheetId,
       actor: user,
       snapshot,
-      rowIndexes: [payload.rowIndex],
+      rowIndexes,
       sourceClientId: payload.sourceClientId
     });
 

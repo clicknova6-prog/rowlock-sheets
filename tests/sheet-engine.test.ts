@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { Role, RuleJoinOperator, RuleOperator } from "@/generated/prisma/enums";
 import { getCellEditDecision } from "@/lib/sheet/permissions";
+import { parseRowIndexList } from "@/lib/sheet/row-index-list";
 import { getRowsForPersistedCellUpdates } from "@/lib/sheet/row-payloads";
 import { evaluateConditionalRules } from "@/lib/sheet/rules";
 import { recalculateCells, mergeRecalculatedCells } from "@/lib/sheet/formulas";
@@ -19,6 +20,8 @@ const permissions: ColumnPermissionState[] = [
     editableByMember: true,
     claimRowOnEdit: true,
     memberWriteOnce: false,
+    memberEditDelaySourceColumnKey: null,
+    memberEditDelayMinutes: 0,
     duplicateHighlight: false,
     matchHighlightTerms: []
   },
@@ -27,6 +30,8 @@ const permissions: ColumnPermissionState[] = [
     editableByMember: false,
     claimRowOnEdit: false,
     memberWriteOnce: false,
+    memberEditDelaySourceColumnKey: null,
+    memberEditDelayMinutes: 0,
     duplicateHighlight: false,
     matchHighlightTerms: []
   },
@@ -35,6 +40,8 @@ const permissions: ColumnPermissionState[] = [
     editableByMember: true,
     claimRowOnEdit: false,
     memberWriteOnce: true,
+    memberEditDelaySourceColumnKey: null,
+    memberEditDelayMinutes: 0,
     duplicateHighlight: false,
     matchHighlightTerms: []
   }
@@ -117,6 +124,55 @@ describe("cell permission and row ownership rules", () => {
 
     expect(decision.allowed).toBe(false);
     expect(decision.reason).toContain("first entry");
+  });
+
+  it("blocks delayed member columns until the source cell is old enough", () => {
+    const delayedPermissions: ColumnPermissionState[] = permissions.map((permission) =>
+      permission.columnKey === "C"
+        ? {
+            ...permission,
+            memberWriteOnce: false,
+            memberEditDelaySourceColumnKey: "A",
+            memberEditDelayMinutes: 20
+          }
+        : permission
+    );
+    const sourceUpdatedAt = new Date("2026-07-03T10:00:00.000Z");
+    const tooSoonDecision = getCellEditDecision({
+      role: Role.MEMBER,
+      userId: "member",
+      columnKey: "C",
+      columnPermissions: delayedPermissions,
+      delaySourceCell: {
+        value: "Ashar",
+        updatedAt: sourceUpdatedAt
+      },
+      now: new Date("2026-07-03T10:10:00.000Z")
+    });
+    const openDecision = getCellEditDecision({
+      role: Role.MEMBER,
+      userId: "member",
+      columnKey: "C",
+      columnPermissions: delayedPermissions,
+      delaySourceCell: {
+        value: "Ashar",
+        updatedAt: sourceUpdatedAt
+      },
+      now: new Date("2026-07-03T10:21:00.000Z")
+    });
+
+    expect(tooSoonDecision.allowed).toBe(false);
+    expect(tooSoonDecision.reason).toContain("opens in");
+    expect(openDecision.allowed).toBe(true);
+  });
+});
+
+describe("row number list parsing", () => {
+  it("parses comma, whitespace, and range row lists", () => {
+    const result = parseRowIndexList("4, 8 - 10\n20", 20);
+
+    expect(result.rowIndexes).toEqual([4, 8, 9, 10, 20]);
+    expect(result.invalidTokens).toEqual([]);
   });
 });
 

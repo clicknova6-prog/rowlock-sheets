@@ -1,5 +1,6 @@
 import { Role, RuleJoinOperator } from "@/generated/prisma/enums";
 import { COLUMN_KEYS, MAX_ROWS, assertColumnKey, getCellKey } from "@/lib/constants";
+import type { ColumnKey } from "@/lib/constants";
 import { prisma } from "@/lib/db";
 import {
   DEFAULT_SHEET_VIEW_SETTING,
@@ -216,7 +217,8 @@ export async function getSheetSnapshot(
         columnKey: true,
         value: true,
         formula: true,
-        computedValue: true
+        computedValue: true,
+        updatedAt: true
       }
     }),
     prisma.columnPermission.findMany({
@@ -226,6 +228,8 @@ export async function getSheetSnapshot(
         editableByMember: true,
         claimRowOnEdit: true,
         memberWriteOnce: true,
+        memberEditDelaySourceColumnKey: true,
+        memberEditDelayMinutes: true,
         duplicateHighlight: true,
         matchHighlightTerms: true
       }
@@ -287,6 +291,12 @@ export async function getSheetSnapshot(
       editableByMember: permission?.editableByMember ?? false,
       claimRowOnEdit: permission?.claimRowOnEdit ?? false,
       memberWriteOnce: permission?.memberWriteOnce ?? false,
+      memberEditDelaySourceColumnKey:
+        permission?.memberEditDelaySourceColumnKey &&
+        COLUMN_KEYS.includes(permission.memberEditDelaySourceColumnKey as ColumnKey)
+          ? (permission.memberEditDelaySourceColumnKey as ColumnKey)
+          : null,
+      memberEditDelayMinutes: Math.max(0, permission?.memberEditDelayMinutes ?? 0),
       duplicateHighlight: permission?.duplicateHighlight ?? false,
       matchHighlightTerms: stringArrayFromJson(permission?.matchHighlightTerms)
     };
@@ -300,7 +310,8 @@ export async function getSheetSnapshot(
       columnKey,
       value: cell.value,
       formula: cell.formula,
-      computedValue: cell.computedValue
+      computedValue: cell.computedValue,
+      updatedAt: cell.updatedAt
     });
   }
 
@@ -361,13 +372,18 @@ export async function getSheetSnapshot(
       formulas[columnKey] = Boolean(cell?.formula);
       format[columnKey] = cellFormat ?? createDefaultCellFormat();
 
+      const permission = permissions.find((item) => item.columnKey === columnKey);
+      const delaySourceCell = permission?.memberEditDelaySourceColumnKey
+        ? cellLookup.get(getCellKey(rowIndex, permission.memberEditDelaySourceColumnKey))
+        : null;
       const decision = getCellEditDecision({
         role: currentUser.role,
         userId: currentUser.id,
         columnKey,
         columnPermissions: permissions,
         ownership,
-        currentValue: values[columnKey]
+        currentValue: values[columnKey],
+        delaySourceCell
       });
 
       editable[columnKey] = decision.allowed;

@@ -89,6 +89,8 @@ export interface UpdateColumnRuleSettingsInput {
   editableByMember: boolean;
   claimRowOnEdit: boolean;
   memberWriteOnce: boolean;
+  memberEditDelaySourceColumnKey?: string | null;
+  memberEditDelayMinutes?: number;
   duplicateHighlight: boolean;
   matchHighlightTerms?: string[];
 }
@@ -118,6 +120,32 @@ function normalizeMatchHighlightTerms(values: string[] | undefined): string[] {
   return [...terms].slice(0, 500);
 }
 
+function normalizeDelayMinutes(value: unknown): number {
+  const minutes = Number.parseInt(String(value ?? "0"), 10);
+
+  if (!Number.isFinite(minutes) || minutes <= 0) {
+    return 0;
+  }
+
+  return Math.min(1440, minutes);
+}
+
+function normalizeRowIndexes(rowIndexes: number[]): number[] {
+  const normalized = [...new Set(rowIndexes)].sort((a, b) => a - b);
+
+  if (normalized.length === 0) {
+    throw new SheetRuleError("Enter at least one row number.");
+  }
+
+  for (const rowIndex of normalized) {
+    if (!isValidRowIndex(rowIndex)) {
+      throw new SheetRuleError("Rows must be between 1 and 1000.");
+    }
+  }
+
+  return normalized;
+}
+
 function normalizeExistingCells(
   cells: Array<{
     rowIndex: number;
@@ -125,6 +153,7 @@ function normalizeExistingCells(
     value: string;
     formula: string | null;
     computedValue: string | null;
+    updatedAt?: Date | string | null;
   }>
 ): CellState[] {
   return cells.map((cell) => ({
@@ -132,7 +161,8 @@ function normalizeExistingCells(
     columnKey: assertColumnKey(cell.columnKey),
     value: cell.value,
     formula: cell.formula,
-    computedValue: cell.computedValue
+    computedValue: cell.computedValue,
+    updatedAt: cell.updatedAt ?? null
   }));
 }
 
@@ -157,6 +187,19 @@ function normalizeExistingCellFormat(format: {
         ? format.horizontalAlign
         : null
   };
+}
+
+function getDelaySourceCellForDecision(
+  columnPermissions: ColumnPermissionState[],
+  rowIndex: number,
+  columnKey: ColumnKey,
+  cellLookup: Map<string, CellState>
+): CellState | null {
+  const permission = columnPermissions.find((item) => item.columnKey === columnKey);
+
+  return permission?.memberEditDelaySourceColumnKey
+    ? cellLookup.get(getCellKey(rowIndex, permission.memberEditDelaySourceColumnKey)) ?? null
+    : null;
 }
 
 function getMetadataString(metadata: unknown, key: string): string | null {
@@ -353,6 +396,8 @@ async function getPermissionStates(sheetId: string): Promise<ColumnPermissionSta
       editableByMember: true,
       claimRowOnEdit: true,
       memberWriteOnce: true,
+      memberEditDelaySourceColumnKey: true,
+      memberEditDelayMinutes: true,
       duplicateHighlight: true,
       matchHighlightTerms: true
     }
@@ -363,6 +408,12 @@ async function getPermissionStates(sheetId: string): Promise<ColumnPermissionSta
     editableByMember: permission.editableByMember,
     claimRowOnEdit: permission.claimRowOnEdit,
     memberWriteOnce: permission.memberWriteOnce,
+    memberEditDelaySourceColumnKey:
+      permission.memberEditDelaySourceColumnKey &&
+      COLUMN_KEYS.includes(permission.memberEditDelaySourceColumnKey as ColumnKey)
+        ? (permission.memberEditDelaySourceColumnKey as ColumnKey)
+        : null,
+    memberEditDelayMinutes: normalizeDelayMinutes(permission.memberEditDelayMinutes),
     duplicateHighlight: permission.duplicateHighlight,
     matchHighlightTerms: Array.isArray(permission.matchHighlightTerms)
       ? permission.matchHighlightTerms.map((term) => String(term)).filter(Boolean)
@@ -453,7 +504,8 @@ export async function updateCell(
           columnKey: true,
           value: true,
           formula: true,
-          computedValue: true
+          computedValue: true,
+          updatedAt: true
         }
       })
     ]);
@@ -471,8 +523,15 @@ export async function updateCell(
 
   const normalizedInput = normalizeCellInput(input.value);
   const existingCellStates = normalizeExistingCells(existingCells);
-  const previousCell = existingCellStates.find(
-    (cell) => cell.rowIndex === input.rowIndex && cell.columnKey === columnKey
+  const previousCellLookup = new Map(
+    existingCellStates.map((cell) => [getCellKey(cell.rowIndex, cell.columnKey), cell])
+  );
+  const previousCell = previousCellLookup.get(getCellKey(input.rowIndex, columnKey));
+  const delaySourceCell = getDelaySourceCellForDecision(
+    columnPermissions,
+    input.rowIndex,
+    columnKey,
+    previousCellLookup
   );
   const previousRawValue = previousCell?.formula ?? previousCell?.value ?? "";
   const decision = getCellEditDecision({
@@ -481,7 +540,8 @@ export async function updateCell(
     columnKey,
     columnPermissions,
     ownership,
-    currentValue: previousRawValue
+    currentValue: previousRawValue,
+    delaySourceCell
   });
 
   if (!decision.allowed) {
@@ -529,6 +589,23 @@ export async function updateCell(
         },
         select: { value: true, formula: true }
       });
+      const livePermission = columnPermissions.find((item) => item.columnKey === columnKey);
+      const liveDelaySourceCell = livePermission?.memberEditDelaySourceColumnKey
+        ? await tx.cell.findUnique({
+            where: {
+              sheetId_rowIndex_columnKey: {
+                sheetId: input.sheetId,
+                rowIndex: input.rowIndex,
+                columnKey: livePermission.memberEditDelaySourceColumnKey
+              }
+            },
+            select: {
+              value: true,
+              formula: true,
+              updatedAt: true
+            }
+          })
+        : null;
 
       const liveDecision = getCellEditDecision({
         role: actor.role,
@@ -542,7 +619,8 @@ export async function updateCell(
               ownerName: liveOwnership.owner.name
             }
           : null,
-        currentValue: liveCell?.formula ?? liveCell?.value ?? ""
+        currentValue: liveCell?.formula ?? liveCell?.value ?? "",
+        delaySourceCell: liveDelaySourceCell
       });
 
       if (!liveDecision.allowed) {
@@ -706,7 +784,8 @@ export async function bulkUpdateCells(
           columnKey: true,
           value: true,
           formula: true,
-          computedValue: true
+          computedValue: true,
+          updatedAt: true
         }
       })
     ]);
@@ -732,13 +811,20 @@ export async function bulkUpdateCells(
   for (const update of normalizedUpdates) {
     const ownership = ownershipLookup.get(update.rowIndex) ?? null;
     const previousCell = previousCellLookup.get(getCellKey(update.rowIndex, update.columnKey));
+    const delaySourceCell = getDelaySourceCellForDecision(
+      columnPermissions,
+      update.rowIndex,
+      update.columnKey,
+      previousCellLookup
+    );
     const decision = getCellEditDecision({
       role: actor.role,
       userId: actor.id,
       columnKey: update.columnKey,
       columnPermissions,
       ownership,
-      currentValue: previousCell?.formula ?? previousCell?.value ?? ""
+      currentValue: previousCell?.formula ?? previousCell?.value ?? "",
+      delaySourceCell
     });
 
     if (!decision.allowed) {
@@ -797,13 +883,20 @@ export async function bulkUpdateCells(
             }
 
             const previousCell = previousCellLookup.get(getCellKey(cell.rowIndex, cell.columnKey));
+            const delaySourceCell = getDelaySourceCellForDecision(
+              columnPermissions,
+              cell.rowIndex,
+              cell.columnKey,
+              previousCellLookup
+            );
             const decision = getCellEditDecision({
               role: actor.role,
               userId: actor.id,
               columnKey: cell.columnKey,
               columnPermissions,
               ownership: ownershipLookup.get(rowIndex) ?? null,
-              currentValue: previousCell?.formula ?? previousCell?.value ?? ""
+              currentValue: previousCell?.formula ?? previousCell?.value ?? "",
+              delaySourceCell
             });
 
             return decision.willClaimRow && hasClaimableValue(cell);
@@ -1019,6 +1112,13 @@ export async function updateColumnRuleSettings(
 
   const claimRowOnEdit = input.editableByMember && input.claimRowOnEdit;
   const matchHighlightTerms = normalizeMatchHighlightTerms(input.matchHighlightTerms);
+  const memberEditDelayMinutes = normalizeDelayMinutes(input.memberEditDelayMinutes);
+  const memberEditDelaySourceColumnKey =
+    input.memberEditDelaySourceColumnKey &&
+    memberEditDelayMinutes > 0 &&
+    input.memberEditDelaySourceColumnKey !== columnKey
+      ? assertColumnKey(input.memberEditDelaySourceColumnKey)
+      : null;
 
   await prisma.$transaction(async (tx) => {
     await tx.columnPermission.upsert({
@@ -1034,6 +1134,11 @@ export async function updateColumnRuleSettings(
         editableByMember: input.editableByMember,
         claimRowOnEdit,
         memberWriteOnce: input.memberWriteOnce,
+        memberEditDelaySourceColumnKey,
+        memberEditDelayMinutes:
+          input.editableByMember && memberEditDelaySourceColumnKey
+            ? memberEditDelayMinutes
+            : 0,
         duplicateHighlight: input.duplicateHighlight,
         matchHighlightTerms
       },
@@ -1041,6 +1146,11 @@ export async function updateColumnRuleSettings(
         editableByMember: input.editableByMember,
         claimRowOnEdit,
         memberWriteOnce: input.memberWriteOnce,
+        memberEditDelaySourceColumnKey,
+        memberEditDelayMinutes:
+          input.editableByMember && memberEditDelaySourceColumnKey
+            ? memberEditDelayMinutes
+            : 0,
         duplicateHighlight: input.duplicateHighlight,
         matchHighlightTerms
       }
@@ -1057,6 +1167,11 @@ export async function updateColumnRuleSettings(
           editableByMember: input.editableByMember,
           claimRowOnEdit,
           memberWriteOnce: input.memberWriteOnce,
+          memberEditDelaySourceColumnKey,
+          memberEditDelayMinutes:
+            input.editableByMember && memberEditDelaySourceColumnKey
+              ? memberEditDelayMinutes
+              : 0,
           duplicateHighlight: input.duplicateHighlight,
           matchHighlightTerms
         }
@@ -1166,13 +1281,19 @@ export async function unlockAllRows(actor: Actor, sheetId: string): Promise<Shee
 }
 
 export async function resetRow(actor: Actor, sheetId: string, rowIndex: number): Promise<SheetSnapshot> {
+  return resetRows(actor, sheetId, [rowIndex]);
+}
+
+export async function resetRows(
+  actor: Actor,
+  sheetId: string,
+  rowIndexes: number[]
+): Promise<SheetSnapshot> {
   if (actor.role !== Role.ADMIN) {
     throw new SheetRuleError("Only admins can reset rows.", 403);
   }
 
-  if (!isValidRowIndex(rowIndex)) {
-    throw new SheetRuleError("Rows must be between 1 and 1000.");
-  }
+  const targetRowIndexes = normalizeRowIndexes(rowIndexes);
 
   await prisma.sheet.findUniqueOrThrow({
     where: { id: sheetId },
@@ -1188,7 +1309,8 @@ export async function resetRow(actor: Actor, sheetId: string, rowIndex: number):
         columnKey: true,
         value: true,
         formula: true,
-        computedValue: true
+        computedValue: true,
+        updatedAt: true
       }
     })
   ]);
@@ -1197,17 +1319,19 @@ export async function resetRow(actor: Actor, sheetId: string, rowIndex: number):
     .map((permission) => permission.columnKey);
 
   await prisma.rowOwnership.deleteMany({
-    where: { sheetId, rowIndex }
+    where: { sheetId, rowIndex: { in: targetRowIndexes } }
   });
 
   if (resetColumns.length > 0) {
-    const resetCells: CellState[] = resetColumns.map((columnKey) => ({
-      rowIndex,
-      columnKey,
-      value: "",
-      formula: null,
-      computedValue: ""
-    }));
+    const resetCells: CellState[] = targetRowIndexes.flatMap((rowIndex) =>
+      resetColumns.map((columnKey) => ({
+        rowIndex,
+        columnKey,
+        value: "",
+        formula: null,
+        computedValue: ""
+      }))
+    );
     const existingCellStates = normalizeExistingCells(existingCells);
     const nextCellsWithoutComputed = upsertEditedCells(existingCellStates, resetCells);
     const recalculated = recalculateCells(nextCellsWithoutComputed);
@@ -1222,7 +1346,7 @@ export async function resetRow(actor: Actor, sheetId: string, rowIndex: number):
       (cell) => cell.formula && !resetCellKeys.has(getCellKey(cell.rowIndex, cell.columnKey))
     );
 
-    await upsertBulkSheetRows(sheetId, [rowIndex], actor.id);
+    await upsertBulkSheetRows(sheetId, targetRowIndexes, actor.id);
     await upsertBulkCells(sheetId, resetCells, computedLookup, actor.id);
     await refreshBulkFormulaCells(sheetId, formulaCellsToRefresh);
   }
@@ -1232,11 +1356,15 @@ export async function resetRow(actor: Actor, sheetId: string, rowIndex: number):
       sheetId,
       actorId: actor.id,
       action: AuditAction.CELL_UPDATED,
-      rowIndex,
-      message: `${actor.name} reset row ${rowIndex}.`,
+      rowIndex: targetRowIndexes.length === 1 ? targetRowIndexes[0] : null,
+      message:
+        targetRowIndexes.length === 1
+          ? `${actor.name} reset row ${targetRowIndexes[0]}.`
+          : `${actor.name} reset ${targetRowIndexes.length} rows.`,
       metadata: {
+        rowIndexes: targetRowIndexes,
         resetColumns,
-        clearedCells: resetColumns.length
+        clearedCells: resetColumns.length * targetRowIndexes.length
       }
     }
   });
@@ -1295,17 +1423,23 @@ export async function unlockRow(
   sheetId: string,
   rowIndex: number
 ): Promise<SheetSnapshot> {
+  return unlockRows(actor, sheetId, [rowIndex]);
+}
+
+export async function unlockRows(
+  actor: Actor,
+  sheetId: string,
+  rowIndexes: number[]
+): Promise<SheetSnapshot> {
   if (actor.role !== Role.ADMIN) {
     throw new SheetRuleError("Only admins can unlock rows.", 403);
   }
 
-  if (!isValidRowIndex(rowIndex)) {
-    throw new SheetRuleError("Rows must be between 1 and 1000.");
-  }
+  const targetRowIndexes = normalizeRowIndexes(rowIndexes);
 
   await prisma.$transaction(async (tx) => {
     await tx.rowOwnership.deleteMany({
-      where: { sheetId, rowIndex }
+      where: { sheetId, rowIndex: { in: targetRowIndexes } }
     });
 
     await tx.auditLog.create({
@@ -1313,8 +1447,14 @@ export async function unlockRow(
         sheetId,
         actorId: actor.id,
         action: AuditAction.ROW_UNLOCKED,
-        rowIndex,
-        message: `${actor.name} unlocked row ${rowIndex}.`
+        rowIndex: targetRowIndexes.length === 1 ? targetRowIndexes[0] : null,
+        message:
+          targetRowIndexes.length === 1
+            ? `${actor.name} unlocked row ${targetRowIndexes[0]}.`
+            : `${actor.name} unlocked ${targetRowIndexes.length} rows.`,
+        metadata: {
+          rowIndexes: targetRowIndexes
+        }
       }
     });
   });
