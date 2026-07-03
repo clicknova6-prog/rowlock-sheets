@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import {
   deleteConditionalRuleAction,
+  deleteAllAuditHistoryAction,
   deleteOldAuditHistoryAction,
   deleteValidationRuleAction,
   resetRowsAction,
@@ -19,7 +20,9 @@ import {
   saveConditionalRuleAction,
   saveSheetViewSettingsAction,
   saveValidationRuleAction,
+  scheduleMemberSheetLockAction,
   unlockRowAction,
+  unlockMemberSheetEditingAction,
   unlockRowsAction
 } from "@/app/actions/admin-actions";
 import { CreateMemberForm } from "@/components/admin/create-member-form";
@@ -47,6 +50,18 @@ const OPERATORS: Array<{ value: RuleOperator; label: string }> = [
 const JOIN_OPERATORS: Array<{ value: RuleJoinOperator; label: string }> = [
   { value: RuleJoinOperator.AND, label: "AND" },
   { value: RuleJoinOperator.OR, label: "OR" }
+];
+
+const MEMBER_EDIT_LOCK_OPTIONS = [
+  { value: 1, label: "1 minute" },
+  { value: 5, label: "5 minutes" },
+  { value: 15, label: "15 minutes" },
+  { value: 30, label: "30 minutes" },
+  { value: 60, label: "1 hour" },
+  { value: 120, label: "2 hours" },
+  { value: 240, label: "4 hours" },
+  { value: 480, label: "8 hours" },
+  { value: 1440, label: "1 day" }
 ];
 
 function FieldLabel({ children }: { children: React.ReactNode }) {
@@ -422,6 +437,33 @@ function ConditionalRuleForm({
   );
 }
 
+function getMemberEditLockStatus(memberEditLockAt: string | null): {
+  label: string;
+  tone: "locked" | "scheduled" | "open";
+} {
+  if (!memberEditLockAt) {
+    return { label: "Member editing is open", tone: "open" };
+  }
+
+  const lockDate = new Date(memberEditLockAt);
+
+  if (!Number.isFinite(lockDate.getTime())) {
+    return { label: "Member editing is open", tone: "open" };
+  }
+
+  if (lockDate.getTime() <= Date.now()) {
+    return {
+      label: `Member editing locked since ${lockDate.toLocaleString()}`,
+      tone: "locked"
+    };
+  }
+
+  return {
+    label: `Member editing will lock at ${lockDate.toLocaleString()}`,
+    tone: "scheduled"
+  };
+}
+
 export function AdminDashboard({
   snapshot,
   members
@@ -436,6 +478,9 @@ export function AdminDashboard({
   const adminOnlyCount = snapshot.columnPermissions.length - memberEditableCount;
   const activeValidationCount = snapshot.validationRules.filter((rule) => rule.enabled).length;
   const activeConditionalCount = snapshot.conditionalRules.filter((rule) => rule.enabled).length;
+  const memberEditLockStatus = getMemberEditLockStatus(
+    snapshot.viewSetting.memberEditLockAt
+  );
 
   return (
     <div className="space-y-5">
@@ -717,6 +762,50 @@ export function AdminDashboard({
           </Section>
 
           <Section
+            description="Schedule a full-sheet member editing lock, or reopen the sheet for members."
+            icon={<Clock3 size={18} />}
+            title="Member Editing Lock"
+          >
+            <div className="space-y-3">
+              <div
+                className={
+                  memberEditLockStatus.tone === "locked"
+                    ? "rounded-md border border-rose-300 bg-rose-50 px-3 py-2 text-sm font-semibold text-rose-800 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-100"
+                    : memberEditLockStatus.tone === "scheduled"
+                      ? "rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-800 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-100"
+                      : "rounded-md border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm font-semibold text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-100"
+                }
+              >
+                {memberEditLockStatus.label}
+              </div>
+              <form action={scheduleMemberSheetLockAction} className="grid gap-2 sm:grid-cols-[1fr_auto]">
+                <input name="sheetId" type="hidden" value={snapshot.sheet.id} />
+                <SelectInput defaultValue={60} name="lockDelayMinutes">
+                  {MEMBER_EDIT_LOCK_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      Lock after {option.label}
+                    </option>
+                  ))}
+                </SelectInput>
+                <ActionButton>
+                  <Lock size={16} />
+                  Schedule lock
+                </ActionButton>
+              </form>
+              <form action={unlockMemberSheetEditingAction}>
+                <input name="sheetId" type="hidden" value={snapshot.sheet.id} />
+                <ActionButton variant="neutral">
+                  <LockOpen size={16} />
+                  Make editable now
+                </ActionButton>
+              </form>
+              <HelpText>
+                Admins can still edit while member editing is locked.
+              </HelpText>
+            </div>
+          </Section>
+
+          <Section
             description="When a member first edits a row, that row belongs to them. Unlock or reset one row, a list, or ranges like 4, 8-12."
             icon={<LockOpen size={18} />}
             title="Row Ownership"
@@ -793,13 +882,22 @@ export function AdminDashboard({
             icon={<ClipboardList size={18} />}
             title="Audit History"
           >
-            <form action={deleteOldAuditHistoryAction} className="mb-4 flex justify-end">
-              <input name="sheetId" type="hidden" value={snapshot.sheet.id} />
-              <ActionButton variant="danger">
-                <Trash2 size={16} />
-                Delete older than 1 day
-              </ActionButton>
-            </form>
+            <div className="mb-4 flex flex-wrap justify-end gap-2">
+              <form action={deleteOldAuditHistoryAction}>
+                <input name="sheetId" type="hidden" value={snapshot.sheet.id} />
+                <ActionButton variant="danger">
+                  <Trash2 size={16} />
+                  Delete older than 1 day
+                </ActionButton>
+              </form>
+              <form action={deleteAllAuditHistoryAction}>
+                <input name="sheetId" type="hidden" value={snapshot.sheet.id} />
+                <ActionButton variant="danger">
+                  <Trash2 size={16} />
+                  Delete all history
+                </ActionButton>
+              </form>
+            </div>
             <div className="space-y-2">
               {snapshot.auditLogs.map((log) => (
                 <div className="rounded-md border border-[color:var(--line)] p-3 text-sm" key={log.id}>

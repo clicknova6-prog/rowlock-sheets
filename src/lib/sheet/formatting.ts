@@ -28,7 +28,8 @@ export const DEFAULT_SHEET_VIEW_SETTING: SheetViewSettingState = {
   fontSize: 14,
   columnWidths: {},
   condensedView: false,
-  frozenHeaderRowIndex: null
+  frozenHeaderRowIndex: null,
+  memberEditLockAt: null
 };
 
 const HEX_COLOR_PATTERN = /^#[0-9a-f]{6}$/i;

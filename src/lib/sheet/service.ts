@@ -100,6 +100,7 @@ export interface UpdateSheetViewSettingsInput {
   columnWidths?: Record<string, number>;
   condensedView?: boolean;
   frozenHeaderRowIndex?: number | null;
+  memberEditLockAt?: Date | string | null;
 }
 
 function hasClaimableValue(cell: CellState): boolean {
@@ -489,7 +490,7 @@ export async function updateCell(
     select: { id: true }
   });
 
-  const [columnPermissions, ownership, validationRules, conditionalRules, existingCells] =
+  const [columnPermissions, ownership, validationRules, conditionalRules, existingCells, viewSetting] =
     await Promise.all([
       getPermissionStates(input.sheetId),
       getOwnershipState(input.sheetId, input.rowIndex),
@@ -507,6 +508,10 @@ export async function updateCell(
           computedValue: true,
           updatedAt: true
         }
+      }),
+      prisma.sheetViewSetting.findUnique({
+        where: { sheetId: input.sheetId },
+        select: { memberEditLockAt: true }
       })
     ]);
 
@@ -541,7 +546,8 @@ export async function updateCell(
     columnPermissions,
     ownership,
     currentValue: previousRawValue,
-    delaySourceCell
+    delaySourceCell,
+    memberEditLockAt: viewSetting?.memberEditLockAt ?? null
   });
 
   if (!decision.allowed) {
@@ -590,6 +596,10 @@ export async function updateCell(
         select: { value: true, formula: true }
       });
       const livePermission = columnPermissions.find((item) => item.columnKey === columnKey);
+      const liveViewSetting = await tx.sheetViewSetting.findUnique({
+        where: { sheetId: input.sheetId },
+        select: { memberEditLockAt: true }
+      });
       const liveDelaySourceCell = livePermission?.memberEditDelaySourceColumnKey
         ? await tx.cell.findUnique({
             where: {
@@ -620,7 +630,8 @@ export async function updateCell(
             }
           : null,
         currentValue: liveCell?.formula ?? liveCell?.value ?? "",
-        delaySourceCell: liveDelaySourceCell
+        delaySourceCell: liveDelaySourceCell,
+        memberEditLockAt: liveViewSetting?.memberEditLockAt ?? null
       });
 
       if (!liveDecision.allowed) {
@@ -763,7 +774,14 @@ export async function bulkUpdateCells(
     select: { id: true }
   });
 
-  const [columnPermissions, ownerships, validationRules, conditionalRules, existingCells] =
+  const [
+    columnPermissions,
+    ownerships,
+    validationRules,
+    conditionalRules,
+    existingCells,
+    viewSetting
+  ] =
     await Promise.all([
       getPermissionStates(input.sheetId),
       prisma.rowOwnership.findMany({
@@ -787,6 +805,10 @@ export async function bulkUpdateCells(
           computedValue: true,
           updatedAt: true
         }
+      }),
+      prisma.sheetViewSetting.findUnique({
+        where: { sheetId: input.sheetId },
+        select: { memberEditLockAt: true }
       })
     ]);
 
@@ -824,7 +846,8 @@ export async function bulkUpdateCells(
       columnPermissions,
       ownership,
       currentValue: previousCell?.formula ?? previousCell?.value ?? "",
-      delaySourceCell
+      delaySourceCell,
+      memberEditLockAt: viewSetting?.memberEditLockAt ?? null
     });
 
     if (!decision.allowed) {
@@ -896,7 +919,8 @@ export async function bulkUpdateCells(
               columnPermissions,
               ownership: ownershipLookup.get(rowIndex) ?? null,
               currentValue: previousCell?.formula ?? previousCell?.value ?? "",
-              delaySourceCell
+              delaySourceCell,
+              memberEditLockAt: viewSetting?.memberEditLockAt ?? null
             });
 
             return decision.willClaimRow && hasClaimableValue(cell);
@@ -1202,6 +1226,12 @@ export async function updateSheetViewSettings(
     input.frozenHeaderRowIndex === undefined
       ? undefined
       : normalizeSheetFrozenHeaderRowIndex(input.frozenHeaderRowIndex);
+  const memberEditLockAt =
+    input.memberEditLockAt === undefined
+      ? undefined
+      : input.memberEditLockAt
+        ? new Date(input.memberEditLockAt)
+        : null;
 
   await prisma.sheet.findUniqueOrThrow({
     where: { id: input.sheetId },
@@ -1211,7 +1241,8 @@ export async function updateSheetViewSettings(
   const updateData = {
     ...(columnWidths === undefined ? {} : { columnWidths }),
     ...(condensedView === undefined ? {} : { condensedView }),
-    ...(frozenHeaderRowIndex === undefined ? {} : { frozenHeaderRowIndex })
+    ...(frozenHeaderRowIndex === undefined ? {} : { frozenHeaderRowIndex }),
+    ...(memberEditLockAt === undefined ? {} : { memberEditLockAt })
   };
 
   const viewSetting = await prisma.sheetViewSetting.upsert({
@@ -1225,7 +1256,9 @@ export async function updateSheetViewSettings(
       columnWidths: columnWidths ?? DEFAULT_SHEET_VIEW_SETTING.columnWidths,
       condensedView: condensedView ?? DEFAULT_SHEET_VIEW_SETTING.condensedView,
       frozenHeaderRowIndex:
-        frozenHeaderRowIndex ?? DEFAULT_SHEET_VIEW_SETTING.frozenHeaderRowIndex
+        frozenHeaderRowIndex ?? DEFAULT_SHEET_VIEW_SETTING.frozenHeaderRowIndex,
+      memberEditLockAt:
+        memberEditLockAt ?? DEFAULT_SHEET_VIEW_SETTING.memberEditLockAt
     },
     update: updateData,
     select: {
@@ -1235,7 +1268,8 @@ export async function updateSheetViewSettings(
       fontSize: true,
       columnWidths: true,
       condensedView: true,
-      frozenHeaderRowIndex: true
+      frozenHeaderRowIndex: true,
+      memberEditLockAt: true
     }
   });
 
@@ -1252,7 +1286,8 @@ export async function updateSheetViewSettings(
     condensedView: normalizeSheetCondensedView(viewSetting.condensedView),
     frozenHeaderRowIndex: normalizeSheetFrozenHeaderRowIndex(
       viewSetting.frozenHeaderRowIndex
-    )
+    ),
+    memberEditLockAt: viewSetting.memberEditLockAt?.toISOString() ?? null
   };
 }
 

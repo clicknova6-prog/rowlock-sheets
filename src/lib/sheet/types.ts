@@ -78,6 +78,7 @@ export interface SheetViewSettingState {
   columnWidths: Partial<Record<ColumnKey, number>>;
   condensedView: boolean;
   frozenHeaderRowIndex: number | null;
+  memberEditLockAt: string | null;
 }
 
 export interface ValidationRuleState {

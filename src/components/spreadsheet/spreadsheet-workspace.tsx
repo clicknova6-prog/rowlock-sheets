@@ -901,7 +901,8 @@ function recomputeRowsForCurrentUser(
         columnKey,
         columnPermissions: snapshot.columnPermissions,
         ownership,
-        currentValue: getRawCellValue(row, columnKey)
+        currentValue: getRawCellValue(row, columnKey),
+        memberEditLockAt: snapshot.viewSetting.memberEditLockAt
       });
 
       editable[columnKey] = decision.allowed;
@@ -1496,6 +1497,43 @@ export function SpreadsheetWorkspace({
   useEffect(() => {
     selectedRangeRef.current = selectedRange;
   }, [selectedRange]);
+
+  useEffect(() => {
+    if (snapshot.currentUser.role === Role.ADMIN || !snapshot.viewSetting.memberEditLockAt) {
+      return;
+    }
+
+    const lockAt = new Date(snapshot.viewSetting.memberEditLockAt).getTime();
+
+    if (!Number.isFinite(lockAt)) {
+      return;
+    }
+
+    const delay = lockAt - Date.now();
+
+    if (delay <= 0) {
+      return;
+    }
+
+    const lockTimer = window.setTimeout(() => {
+      const currentSnapshot = latestSnapshotRef.current;
+      const nextRows = recomputeRowsForCurrentUser(currentSnapshot.rows, currentSnapshot);
+      const nextSnapshot = {
+        ...currentSnapshot,
+        rows: nextRows
+      };
+
+      latestSnapshotRef.current = nextSnapshot;
+      rowsRef.current = nextRows;
+      setRows(nextRows);
+      setSnapshot(nextSnapshot);
+      setMessage("Member editing is now locked for this sheet.");
+    }, delay);
+
+    return () => {
+      window.clearTimeout(lockTimer);
+    };
+  }, [snapshot.currentUser.role, snapshot.viewSetting.memberEditLockAt]);
 
   useEffect(() => {
     function warnBeforeUnload(event: BeforeUnloadEvent): void {

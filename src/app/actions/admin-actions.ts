@@ -13,6 +13,7 @@ import {
 import { parseRowIndexList } from "@/lib/sheet/row-index-list";
 import { resetRows, unlockRow, unlockRows } from "@/lib/sheet/service";
 import {
+  DEFAULT_SHEET_VIEW_SETTING,
   normalizeHexColor,
   normalizeSheetCondensedView,
   normalizeSheetFontSize,
@@ -67,6 +68,16 @@ function parseDelayMinutes(value: string): number {
   }
 
   return Math.min(1440, minutes);
+}
+
+function parseLockDelayMinutes(value: string): number | null {
+  const minutes = Number.parseInt(value, 10);
+
+  if (!Number.isInteger(minutes) || minutes <= 0) {
+    return null;
+  }
+
+  return Math.min(7 * 24 * 60, minutes);
 }
 
 function validatePassword(password: string): string | null {
@@ -594,6 +605,96 @@ export async function deleteOldAuditHistoryAction(formData: FormData): Promise<v
         result.count === 1 ? "y" : "ies"
       } older than 1 day.`
     }
+  });
+
+  refreshApp();
+}
+
+export async function deleteAllAuditHistoryAction(formData: FormData): Promise<void> {
+  await requireAdmin();
+  const sheetId = getString(formData, "sheetId");
+
+  await prisma.auditLog.deleteMany({
+    where: { sheetId }
+  });
+
+  refreshApp();
+}
+
+export async function scheduleMemberSheetLockAction(formData: FormData): Promise<void> {
+  const actor = await requireAdmin();
+  const sheetId = getString(formData, "sheetId");
+  const delayMinutes = parseLockDelayMinutes(getString(formData, "lockDelayMinutes"));
+
+  if (!delayMinutes) {
+    return;
+  }
+
+  const memberEditLockAt = new Date(Date.now() + delayMinutes * 60 * 1000);
+
+  await prisma.$transaction(async (tx) => {
+    await tx.sheetViewSetting.upsert({
+      where: { sheetId },
+      create: {
+        sheetId,
+        alternateRowColors: DEFAULT_SHEET_VIEW_SETTING.alternateRowColors,
+        alternateOddColor: DEFAULT_SHEET_VIEW_SETTING.alternateOddColor,
+        alternateEvenColor: DEFAULT_SHEET_VIEW_SETTING.alternateEvenColor,
+        fontSize: DEFAULT_SHEET_VIEW_SETTING.fontSize,
+        columnWidths: DEFAULT_SHEET_VIEW_SETTING.columnWidths,
+        condensedView: DEFAULT_SHEET_VIEW_SETTING.condensedView,
+        frozenHeaderRowIndex: DEFAULT_SHEET_VIEW_SETTING.frozenHeaderRowIndex,
+        memberEditLockAt
+      },
+      update: { memberEditLockAt }
+    });
+
+    await tx.auditLog.create({
+      data: {
+        sheetId,
+        actorId: actor.id,
+        action: AuditAction.SHEET_VIEW_UPDATED,
+        message: `${actor.name} scheduled member editing to lock at ${memberEditLockAt.toLocaleString()}.`,
+        metadata: {
+          memberEditLockAt: memberEditLockAt.toISOString(),
+          delayMinutes
+        }
+      }
+    });
+  });
+
+  refreshApp();
+}
+
+export async function unlockMemberSheetEditingAction(formData: FormData): Promise<void> {
+  const actor = await requireAdmin();
+  const sheetId = getString(formData, "sheetId");
+
+  await prisma.$transaction(async (tx) => {
+    await tx.sheetViewSetting.upsert({
+      where: { sheetId },
+      create: {
+        sheetId,
+        alternateRowColors: DEFAULT_SHEET_VIEW_SETTING.alternateRowColors,
+        alternateOddColor: DEFAULT_SHEET_VIEW_SETTING.alternateOddColor,
+        alternateEvenColor: DEFAULT_SHEET_VIEW_SETTING.alternateEvenColor,
+        fontSize: DEFAULT_SHEET_VIEW_SETTING.fontSize,
+        columnWidths: DEFAULT_SHEET_VIEW_SETTING.columnWidths,
+        condensedView: DEFAULT_SHEET_VIEW_SETTING.condensedView,
+        frozenHeaderRowIndex: DEFAULT_SHEET_VIEW_SETTING.frozenHeaderRowIndex,
+        memberEditLockAt: null
+      },
+      update: { memberEditLockAt: null }
+    });
+
+    await tx.auditLog.create({
+      data: {
+        sheetId,
+        actorId: actor.id,
+        action: AuditAction.SHEET_VIEW_UPDATED,
+        message: `${actor.name} made the sheet editable for members.`
+      }
+    });
   });
 
   refreshApp();

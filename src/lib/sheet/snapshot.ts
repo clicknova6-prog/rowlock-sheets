@@ -264,7 +264,8 @@ export async function getSheetSnapshot(
         fontSize: true,
         columnWidths: true,
         condensedView: true,
-        frozenHeaderRowIndex: true
+        frozenHeaderRowIndex: true,
+        memberEditLockAt: true
       }
     }),
     prisma.validationRule.findMany({
@@ -383,7 +384,8 @@ export async function getSheetSnapshot(
         columnPermissions: permissions,
         ownership,
         currentValue: values[columnKey],
-        delaySourceCell
+        delaySourceCell,
+        memberEditLockAt: viewSetting?.memberEditLockAt ?? null
       });
 
       editable[columnKey] = decision.allowed;
@@ -439,7 +441,8 @@ export async function getSheetSnapshot(
       condensedView: normalizeSheetCondensedView(viewSetting?.condensedView),
       frozenHeaderRowIndex: normalizeSheetFrozenHeaderRowIndex(
         viewSetting?.frozenHeaderRowIndex
-      )
+      ),
+      memberEditLockAt: viewSetting?.memberEditLockAt?.toISOString() ?? null
     },
     columnPermissions: permissions,
     validationRules: validationRules.map(mapValidationRule),

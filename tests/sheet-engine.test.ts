@@ -165,6 +165,29 @@ describe("cell permission and row ownership rules", () => {
     expect(tooSoonDecision.reason).toContain("opens in");
     expect(openDecision.allowed).toBe(true);
   });
+
+  it("blocks members after the sheet-wide member edit lock time", () => {
+    const lockedMemberDecision = getCellEditDecision({
+      role: Role.MEMBER,
+      userId: "member",
+      columnKey: "A",
+      columnPermissions: permissions,
+      memberEditLockAt: "2026-07-03T10:00:00.000Z",
+      now: new Date("2026-07-03T10:01:00.000Z")
+    });
+    const adminDecision = getCellEditDecision({
+      role: Role.ADMIN,
+      userId: "admin",
+      columnKey: "A",
+      columnPermissions: permissions,
+      memberEditLockAt: "2026-07-03T10:00:00.000Z",
+      now: new Date("2026-07-03T10:01:00.000Z")
+    });
+
+    expect(lockedMemberDecision.allowed).toBe(false);
+    expect(lockedMemberDecision.reason).toContain("locked");
+    expect(adminDecision.allowed).toBe(true);
+  });
 });
 
 describe("row number list parsing", () => {

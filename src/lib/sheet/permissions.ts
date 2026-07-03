@@ -14,6 +14,7 @@ export interface CellEditDecisionInput {
     formula?: string | null;
     updatedAt?: Date | string | null;
   } | null;
+  memberEditLockAt?: Date | string | null;
   now?: Date;
 }
 
@@ -40,6 +41,22 @@ function getDelayTimestamp(value: Date | string | null | undefined): number | nu
   const timestamp = new Date(value).getTime();
 
   return Number.isFinite(timestamp) ? timestamp : null;
+}
+
+function getMemberSheetLockBlockReason(input: CellEditDecisionInput): string | null {
+  const lockAt = getDelayTimestamp(input.memberEditLockAt);
+
+  if (!lockAt) {
+    return null;
+  }
+
+  const now = input.now?.getTime() ?? Date.now();
+
+  if (now >= lockAt) {
+    return "Member editing is locked for this sheet.";
+  }
+
+  return null;
 }
 
 function getMemberDelayBlockReason(
@@ -84,6 +101,17 @@ export function getCellEditDecision(input: CellEditDecisionInput): CellEditDecis
       reason: null,
       willClaimRow: false,
       state: "admin"
+    };
+  }
+
+  const sheetLockBlockReason = getMemberSheetLockBlockReason(input);
+
+  if (sheetLockBlockReason) {
+    return {
+      allowed: false,
+      reason: sheetLockBlockReason,
+      willClaimRow: false,
+      state: "admin-only"
     };
   }
 

@@ -147,8 +147,9 @@ model SheetViewSetting {
   alternateEvenColor String   @default("#f8fafc") @db.VarChar(20)
   fontSize           Int      @default(14)
   columnWidths       Json?
-  condensedView        Boolean  @default(false)
+  condensedView      Boolean   @default(false)
   frozenHeaderRowIndex Int?
+  memberEditLockAt   DateTime?
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
 

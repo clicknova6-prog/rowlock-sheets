@@ -226,7 +226,8 @@ export function buildRowsFromCells(
         columnPermissions: snapshot.columnPermissions,
         ownership,
         currentValue: values[columnKey],
-        delaySourceCell
+        delaySourceCell,
+        memberEditLockAt: snapshot.viewSetting.memberEditLockAt
       });
 
       editable[columnKey] = decision.allowed;
@@ -313,7 +314,8 @@ export function applyDemoCellUpdate(
     columnPermissions: snapshot.columnPermissions,
     ownership,
     currentValue: previousCell?.formula ?? previousCell?.value ?? "",
-    delaySourceCell
+    delaySourceCell,
+    memberEditLockAt: snapshot.viewSetting.memberEditLockAt
   });
 
   if (!decision.allowed) {
