@@ -10,8 +10,10 @@ import {
   deleteFirebaseMember,
   updateFirebaseMemberPassword
 } from "@/lib/firebase/users";
+import { publishSheetRealtimeEvent } from "@/lib/firebase/sheet-realtime";
 import { parseRowIndexList } from "@/lib/sheet/row-index-list";
 import { resetRows, unlockRow, unlockRows } from "@/lib/sheet/service";
+import { getSheetSnapshot } from "@/lib/sheet/snapshot";
 import {
   DEFAULT_SHEET_VIEW_SETTING,
   normalizeHexColor,
@@ -21,6 +23,7 @@ import {
 } from "@/lib/sheet/formatting";
 import { parseRuleValues, toRuleJoinOperator, toRuleOperator } from "@/lib/sheet/rules";
 import { parseAllowedValues } from "@/lib/sheet/validation";
+import type { Actor } from "@/lib/sheet/types";
 
 export interface CreateMemberActionState {
   ok: boolean;
@@ -125,6 +128,18 @@ async function auditAdminChange(
 function refreshApp(): void {
   revalidatePath("/");
   revalidatePath("/admin");
+}
+
+async function publishSheetSettingsRefresh(sheetId: string, actor: Actor): Promise<void> {
+  const snapshot = await getSheetSnapshot(sheetId, actor);
+
+  await publishSheetRealtimeEvent({
+    type: "format-changed",
+    sheetId,
+    actor,
+    snapshot,
+    requiresRefresh: true
+  });
 }
 
 export async function createMemberAction(
@@ -299,6 +314,7 @@ export async function saveColumnPermissionsAction(formData: FormData): Promise<v
     }
   );
 
+  await publishSheetSettingsRefresh(sheetId, actor);
   refreshApp();
 }
 
@@ -346,6 +362,7 @@ export async function saveSheetViewSettingsAction(formData: FormData): Promise<v
     });
   });
 
+  await publishSheetSettingsRefresh(sheetId, actor);
   refreshApp();
 }
 
@@ -437,6 +454,7 @@ export async function saveValidationRuleAction(formData: FormData): Promise<void
     });
   });
 
+  await publishSheetSettingsRefresh(sheetId, actor);
   refreshApp();
 }
 
@@ -548,6 +566,7 @@ export async function saveConditionalRuleAction(formData: FormData): Promise<voi
     });
   });
 
+  await publishSheetSettingsRefresh(sheetId, actor);
   refreshApp();
 }
 
@@ -607,17 +626,19 @@ export async function deleteOldAuditHistoryAction(formData: FormData): Promise<v
     }
   });
 
+  await publishSheetSettingsRefresh(sheetId, actor);
   refreshApp();
 }
 
 export async function deleteAllAuditHistoryAction(formData: FormData): Promise<void> {
-  await requireAdmin();
+  const actor = await requireAdmin();
   const sheetId = getString(formData, "sheetId");
 
   await prisma.auditLog.deleteMany({
     where: { sheetId }
   });
 
+  await publishSheetSettingsRefresh(sheetId, actor);
   refreshApp();
 }
 
@@ -663,6 +684,7 @@ export async function scheduleMemberSheetLockAction(formData: FormData): Promise
     });
   });
 
+  await publishSheetSettingsRefresh(sheetId, actor);
   refreshApp();
 }
 
@@ -697,6 +719,7 @@ export async function unlockMemberSheetEditingAction(formData: FormData): Promis
     });
   });
 
+  await publishSheetSettingsRefresh(sheetId, actor);
   refreshApp();
 }
 

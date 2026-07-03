@@ -1239,7 +1239,6 @@ export function SpreadsheetWorkspace({
   const socketSyncEnabled = !demoMode && process.env.NEXT_PUBLIC_ENABLE_SOCKET_SYNC !== "false";
   const firestoreSyncEnabled =
     !demoMode &&
-    !socketSyncEnabled &&
     process.env.NEXT_PUBLIC_ENABLE_FIRESTORE_SYNC !== "false";
   const isAdmin = snapshot.currentUser.role === Role.ADMIN;
   const selectedStartCell = getRangeStartCell(selectedRange, snapshot.columns) ?? selectedCell;
@@ -2319,7 +2318,11 @@ export function SpreadsheetWorkspace({
     sheetId: snapshot.sheet.id,
     enabled: firestoreSyncEnabled,
     onEvent: handleFirestoreRealtimeEvent,
-    onError: setError
+    onError: (message) => {
+      if (!socketSyncEnabled || !socketConnectedRef.current) {
+        setError(message);
+      }
+    }
   });
   const sheetPresence = useSheetPresence({
     sheetId: snapshot.sheet.id,
