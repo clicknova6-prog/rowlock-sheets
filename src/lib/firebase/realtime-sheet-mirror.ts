@@ -9,6 +9,7 @@ import { firebaseAdminRealtimeDb } from "./admin";
 
 const RTDB_SCHEMA_VERSION = 1;
 const FORBIDDEN_RTDB_KEY_CHARS = /[.#$/[\]]/g;
+const DEFAULT_MIRROR_TIMEOUT_MS = 2500;
 
 function isRealtimeMirrorEnabled(force = false): boolean {
   return force || process.env.ENABLE_RTDB_MIRROR === "true";
@@ -24,6 +25,12 @@ function cleanForRealtimeDatabase<T>(value: T): T {
 
 function nowIso(): string {
   return new Date().toISOString();
+}
+
+function getMirrorTimeoutMs(): number {
+  const rawValue = Number(process.env.RTDB_MIRROR_TIMEOUT_MS);
+
+  return Number.isFinite(rawValue) && rawValue > 0 ? rawValue : DEFAULT_MIRROR_TIMEOUT_MS;
 }
 
 function serializeCellFormat(format: CellFormatState): CellFormatState {
@@ -200,10 +207,23 @@ async function mirrorSafely(
   label: string,
   task: () => Promise<void>
 ): Promise<void> {
+  let timeoutHandle: NodeJS.Timeout | null = null;
+
   try {
-    await task();
+    await Promise.race([
+      task(),
+      new Promise<void>((_, reject) => {
+        timeoutHandle = setTimeout(() => {
+          reject(new Error(`Timed out after ${getMirrorTimeoutMs()}ms.`));
+        }, getMirrorTimeoutMs());
+      })
+    ]);
   } catch (error) {
     console.warn(`Unable to mirror ${label} to Realtime Database.`, error);
+  } finally {
+    if (timeoutHandle) {
+      clearTimeout(timeoutHandle);
+    }
   }
 }
 

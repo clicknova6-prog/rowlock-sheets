@@ -340,7 +340,6 @@ export async function getFirebaseActorByUid(uid: string): Promise<Actor | null> 
   };
 
   await syncPrismaUser(actor);
-  await mirrorUserProfileToRealtimeDatabase(actor);
 
   return actor;
 }

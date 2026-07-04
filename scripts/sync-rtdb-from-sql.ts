@@ -1,6 +1,7 @@
 import "dotenv/config";
 import { Role } from "@/generated/prisma/enums";
 import { prisma } from "@/lib/db";
+import { firebaseAdminRealtimeDb } from "@/lib/firebase/admin";
 import { mirrorSheetSnapshotToRealtimeDatabase } from "@/lib/firebase/realtime-sheet-mirror";
 import { getSheetSnapshot } from "@/lib/sheet/snapshot";
 import type { Actor } from "@/lib/sheet/types";
@@ -48,5 +49,6 @@ main()
     process.exitCode = 1;
   })
   .finally(async () => {
+    firebaseAdminRealtimeDb.goOffline();
     await prisma.$disconnect();
   });
