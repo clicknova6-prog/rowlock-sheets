@@ -2,7 +2,9 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { getCurrentUser } from "@/lib/auth/session";
 import { MAX_ROWS } from "@/lib/constants";
+import { mirrorSheetConfigToRealtimeDatabase } from "@/lib/firebase/realtime-sheet-mirror";
 import { SheetRuleError, updateSheetViewSettings } from "@/lib/sheet/service";
+import { getSheetSnapshot } from "@/lib/sheet/snapshot";
 
 const updateSheetViewSettingsSchema = z.object({
   sheetId: z.string().min(1),
@@ -21,6 +23,9 @@ export async function POST(request: Request): Promise<NextResponse> {
   try {
     const payload = updateSheetViewSettingsSchema.parse(await request.json());
     const viewSetting = await updateSheetViewSettings(user, payload);
+    const snapshot = await getSheetSnapshot(payload.sheetId, user);
+
+    await mirrorSheetConfigToRealtimeDatabase(snapshot);
 
     return NextResponse.json({ viewSetting });
   } catch (error) {

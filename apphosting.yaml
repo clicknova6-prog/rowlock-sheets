@@ -72,6 +72,11 @@ env:
     availability:
       - BUILD
       - RUNTIME
+  - variable: NEXT_PUBLIC_FIREBASE_DATABASE_URL
+    value: "https://jobsheet-291c1-default-rtdb.firebaseio.com"
+    availability:
+      - BUILD
+      - RUNTIME
   - variable: NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET
     value: "jobsheet-291c1.firebasestorage.app"
     availability:
@@ -95,6 +100,15 @@ env:
   - variable: SOCKET_CORS_ORIGIN
     value: "https://rowlock-sheets--jobsheet-291c1.us-central1.hosted.app"
     availability:
+      - RUNTIME
+  - variable: ENABLE_RTDB_MIRROR
+    value: "true"
+    availability:
+      - RUNTIME
+  - variable: FIREBASE_DATABASE_URL
+    value: "https://jobsheet-291c1-default-rtdb.firebaseio.com"
+    availability:
+      - BUILD
       - RUNTIME
   - variable: DATABASE_URL
     secret: DATABASE_URL

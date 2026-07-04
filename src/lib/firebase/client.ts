@@ -1,5 +1,6 @@
 import { getApps, initializeApp } from "firebase/app";
 import { getAuth } from "firebase/auth";
+import { getDatabase } from "firebase/database";
 import { getFirestore } from "firebase/firestore";
 
 const firebaseConfig = {
@@ -19,3 +20,6 @@ const firebaseConfig = {
 export const firebaseApp = getApps()[0] ?? initializeApp(firebaseConfig);
 export const firebaseAuth = getAuth(firebaseApp);
 export const firebaseDb = getFirestore(firebaseApp);
+export const firebaseRealtimeDb = process.env.NEXT_PUBLIC_FIREBASE_DATABASE_URL
+  ? getDatabase(firebaseApp, process.env.NEXT_PUBLIC_FIREBASE_DATABASE_URL)
+  : getDatabase(firebaseApp);

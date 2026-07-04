@@ -16,6 +16,7 @@
     "prisma:migrate": "prisma migrate dev",
     "prisma:deploy": "prisma migrate deploy",
     "prisma:studio": "prisma studio",
+    "rtdb:sync": "tsx scripts/sync-rtdb-from-sql.ts",
     "seed": "tsx prisma/seed.ts"
   },
   "dependencies": {

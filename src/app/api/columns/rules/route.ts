@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { getCurrentUser } from "@/lib/auth/session";
+import { mirrorSheetConfigToRealtimeDatabase } from "@/lib/firebase/realtime-sheet-mirror";
 import { publishSheetRealtimeEvent } from "@/lib/firebase/sheet-realtime";
 import { SheetRuleError, updateColumnRuleSettings } from "@/lib/sheet/service";
 
@@ -36,6 +37,7 @@ export async function POST(request: Request): Promise<NextResponse> {
       requiresRefresh: true,
       sourceClientId: payload.sourceClientId
     });
+    await mirrorSheetConfigToRealtimeDatabase(snapshot);
 
     return NextResponse.json({ snapshot });
   } catch (error) {

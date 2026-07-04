@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { getCurrentUser } from "@/lib/auth/session";
+import { mirrorSheetRowsToRealtimeDatabase } from "@/lib/firebase/realtime-sheet-mirror";
 import { publishSheetRealtimeEvent } from "@/lib/firebase/sheet-realtime";
 import { SheetRuleError, updateCellFormats } from "@/lib/sheet/service";
 
@@ -59,6 +60,12 @@ export async function POST(request: Request): Promise<NextResponse> {
       rowIndexes: getRangeRowIndexes(payload.startRow, payload.endRow),
       sourceClientId: payload.sourceClientId
     });
+    await mirrorSheetRowsToRealtimeDatabase(
+      snapshot,
+      snapshot.rows.filter((row) =>
+        getRangeRowIndexes(payload.startRow, payload.endRow).includes(row.rowNumber)
+      )
+    );
 
     return NextResponse.json({ snapshot });
   } catch (error) {

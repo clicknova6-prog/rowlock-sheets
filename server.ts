@@ -5,6 +5,7 @@ import { Server, type Socket } from "socket.io";
 import { Role } from "@/generated/prisma/enums";
 import { SESSION_COOKIE, verifySessionToken } from "@/lib/auth/token";
 import { getFirebaseActorByUid } from "@/lib/firebase/users";
+import { mirrorSheetRowsToRealtimeDatabase } from "@/lib/firebase/realtime-sheet-mirror";
 import { assertColumnKey, getCellKey, isValidRowIndex } from "@/lib/constants";
 import { prisma } from "@/lib/db";
 import { getRowsForPersistedCellUpdates } from "@/lib/sheet/row-payloads";
@@ -284,18 +285,21 @@ async function flushPendingCellWriteBuffer(
         }))
       })
     );
+    const rows = getRowsForPersistedCellUpdates(
+      snapshot,
+      updates.map((update) => ({
+        rowIndex: update.row,
+        columnKey: update.col
+      }))
+    );
+
+    await mirrorSheetRowsToRealtimeDatabase(snapshot, rows);
 
     io.to(roomName(sheetId)).emit("cells-changed", {
       sheetId,
       updates,
       userId: actor.id,
-      rows: getRowsForPersistedCellUpdates(
-        snapshot,
-        updates.map((update) => ({
-          rowIndex: update.row,
-          columnKey: update.col
-        }))
-      ),
+      rows,
       persisted: true
     });
   } catch (error) {
@@ -654,13 +658,16 @@ async function claimRowFromSocket(
     rowIndex: input.row,
     columnKey: input.col
   });
+  const rows = snapshot.rows.filter((row) => row.rowNumber === input.row);
+
+  await mirrorSheetRowsToRealtimeDatabase(snapshot, rows);
 
   io.to(roomName(input.sheetId)).emit("row-claimed", {
     sheetId: input.sheetId,
     row: input.row,
     col: input.col,
     userId: socket.data.user.id,
-    rows: snapshot.rows.filter((row) => row.rowNumber === input.row)
+    rows
   });
 }
 

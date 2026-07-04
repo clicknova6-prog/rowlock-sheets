@@ -3,6 +3,10 @@ import { FieldValue } from "firebase-admin/firestore";
 import { Role } from "@/generated/prisma/enums";
 import type { Actor, AdminMemberState } from "@/lib/sheet/types";
 import { firebaseAdminAuth, firebaseAdminDb } from "./admin";
+import {
+  deleteUserProfileFromRealtimeDatabase,
+  mirrorUserProfileToRealtimeDatabase
+} from "./realtime-sheet-mirror";
 
 interface FirebaseUserProfile {
   email?: string;
@@ -113,6 +117,7 @@ export async function createFirebaseMember({
       updatedAt: FieldValue.serverTimestamp()
     });
     await syncPrismaUser(actor);
+    await mirrorUserProfileToRealtimeDatabase(actor);
     return actor;
   } catch (error) {
     await Promise.allSettled([
@@ -210,6 +215,7 @@ export async function updateFirebaseMemberPassword(
     where: { id: member.id },
     data: { updatedAt: new Date() }
   });
+  await mirrorUserProfileToRealtimeDatabase(member);
 
   return {
     id: member.id,
@@ -244,6 +250,7 @@ export async function deleteFirebaseMember(memberId: string): Promise<Actor> {
   }
 
   await firebaseAdminDb.collection("users").doc(member.id).delete();
+  await deleteUserProfileFromRealtimeDatabase(member.id);
   await prisma.$transaction(
     async (tx) => {
       await tx.rowOwnership.deleteMany({ where: { ownerId: member.id } });
@@ -307,6 +314,7 @@ export async function getOrCreateFirebaseActor(token: DecodedIdToken): Promise<A
   );
 
   await syncPrismaUser(actor);
+  await mirrorUserProfileToRealtimeDatabase(actor);
 
   return actor;
 }
@@ -332,6 +340,7 @@ export async function getFirebaseActorByUid(uid: string): Promise<Actor | null> 
   };
 
   await syncPrismaUser(actor);
+  await mirrorUserProfileToRealtimeDatabase(actor);
 
   return actor;
 }

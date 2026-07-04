@@ -1,0 +1,14 @@
+{
+  "rules": {
+    ".read": "auth != null && root.child('users').child(auth.uid).exists()",
+    ".write": false,
+    "presence": {
+      "$sheetId": {
+        "$uid": {
+          ".read": "auth != null && root.child('users').child(auth.uid).exists()",
+          ".write": "auth != null && auth.uid === $uid && root.child('users').child(auth.uid).exists()"
+        }
+      }
+    }
+  }
+}

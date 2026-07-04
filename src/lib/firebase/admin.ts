@@ -1,5 +1,6 @@
 import { applicationDefault, cert, getApps, initializeApp } from "firebase-admin/app";
 import { getAuth } from "firebase-admin/auth";
+import { getDatabase } from "firebase-admin/database";
 import { getFirestore } from "firebase-admin/firestore";
 
 function getServiceAccount() {
@@ -17,12 +18,16 @@ function getServiceAccount() {
 }
 
 const serviceAccount = getServiceAccount();
-const firebaseAdminApp =
+export const firebaseAdminApp =
   getApps()[0] ??
   initializeApp({
     credential: serviceAccount ? cert(serviceAccount) : applicationDefault(),
+    ...(process.env.FIREBASE_DATABASE_URL
+      ? { databaseURL: process.env.FIREBASE_DATABASE_URL }
+      : {}),
     projectId: process.env.FIREBASE_PROJECT_ID ?? "jobsheet-291c1"
   });
 
 export const firebaseAdminAuth = getAuth(firebaseAdminApp);
 export const firebaseAdminDb = getFirestore(firebaseAdminApp);
+export const firebaseAdminRealtimeDb = getDatabase(firebaseAdminApp);

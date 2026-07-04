@@ -138,6 +138,43 @@ sheetRealtime/{sheetId}/events/{eventId}
 
 These event documents are a lightweight notification layer only. The actual spreadsheet source of truth remains Cloud SQL/MySQL through Prisma.
 
+### Realtime Database Mirror Migration
+
+The app can dual-write confirmed SQL changes into Firebase Realtime Database as a reversible migration step. SQL remains the source of truth while `ENABLE_RTDB_MIRROR=true`; if the mirror has issues, set the flag back to `false` and redeploy.
+
+RTDB mirror paths:
+
+```txt
+users/{uid}
+sheets/{sheetId}/metadata
+sheets/{sheetId}/cells/{rowIndex}/{columnKey}
+sheets/{sheetId}/rowMeta/{rowIndex}
+sheets/{sheetId}/ownership/{rowIndex}
+sheets/{sheetId}/formats/{rowIndex}/{columnKey}
+sheets/{sheetId}/permissions/{columnKey}
+sheets/{sheetId}/validationRules/{ruleId}
+sheets/{sheetId}/conditionalRules/{ruleId}
+sheets/{sheetId}/audit/{auditId}
+```
+
+Initial or repair sync from SQL:
+
+```bash
+ENABLE_RTDB_MIRROR=true npm run rtdb:sync
+```
+
+Deploy RTDB rules:
+
+```bash
+npx -y firebase-tools@latest deploy --only database --project jobsheet-291c1
+```
+
+Rollback while SQL is still active:
+
+```bash
+# Set ENABLE_RTDB_MIRROR=false in App Hosting, then redeploy/roll out main.
+```
+
 Set `FIREBASE_ADMIN_EMAILS` to a comma-separated list of emails that should become admins the first time they sign in. It is currently set to `clicknova6@gmail.com` in `apphosting.yaml`. Existing Firestore user documents keep their saved role.
 
 Cloud Firestore is enabled and the default Standard database has been created in `nam5`.

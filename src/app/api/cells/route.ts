@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { getCurrentUser } from "@/lib/auth/session";
 import { assertColumnKey } from "@/lib/constants";
+import { mirrorSheetRowsToRealtimeDatabase } from "@/lib/firebase/realtime-sheet-mirror";
 import { publishSheetRealtimeEvent } from "@/lib/firebase/sheet-realtime";
 import { getRowsForPersistedCellUpdates } from "@/lib/sheet/row-payloads";
 import { SheetRuleError, bulkUpdateCells, updateCell } from "@/lib/sheet/service";
@@ -63,6 +64,7 @@ export async function POST(request: Request): Promise<NextResponse> {
         })),
         sourceClientId: payload.sourceClientId
       });
+      await mirrorSheetRowsToRealtimeDatabase(snapshot, rows);
 
       return NextResponse.json({ rows });
     }
@@ -87,6 +89,7 @@ export async function POST(request: Request): Promise<NextResponse> {
       updates: [{ row: payload.rowIndex, col: columnKey }],
       sourceClientId: payload.sourceClientId
     });
+    await mirrorSheetRowsToRealtimeDatabase(snapshot, rows);
 
     return NextResponse.json({ rows });
   } catch (error) {

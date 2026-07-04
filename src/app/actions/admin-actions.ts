@@ -10,6 +10,10 @@ import {
   deleteFirebaseMember,
   updateFirebaseMemberPassword
 } from "@/lib/firebase/users";
+import {
+  mirrorSheetConfigToRealtimeDatabase,
+  mirrorSheetRowsToRealtimeDatabase
+} from "@/lib/firebase/realtime-sheet-mirror";
 import { publishSheetRealtimeEvent } from "@/lib/firebase/sheet-realtime";
 import { parseRowIndexList } from "@/lib/sheet/row-index-list";
 import { resetRows, unlockRow, unlockRows } from "@/lib/sheet/service";
@@ -133,6 +137,7 @@ function refreshApp(): void {
 async function publishSheetSettingsRefresh(sheetId: string, actor: Actor): Promise<void> {
   const snapshot = await getSheetSnapshot(sheetId, actor);
 
+  await mirrorSheetConfigToRealtimeDatabase(snapshot);
   await publishSheetRealtimeEvent({
     type: "format-changed",
     sheetId,
@@ -475,6 +480,7 @@ export async function deleteValidationRuleAction(formData: FormData): Promise<vo
     `${actor.name} deleted a validation rule.`
   );
 
+  await publishSheetSettingsRefresh(sheetId, actor);
   refreshApp();
 }
 
@@ -587,6 +593,7 @@ export async function deleteConditionalRuleAction(formData: FormData): Promise<v
     `${actor.name} deleted a conditional rule.`
   );
 
+  await publishSheetSettingsRefresh(sheetId, actor);
   refreshApp();
 }
 
@@ -599,7 +606,11 @@ export async function unlockRowAction(formData: FormData): Promise<void> {
     return;
   }
 
-  await unlockRow(actor, sheetId, rowIndex);
+  const snapshot = await unlockRow(actor, sheetId, rowIndex);
+  await mirrorSheetRowsToRealtimeDatabase(
+    snapshot,
+    snapshot.rows.filter((row) => row.rowNumber === rowIndex)
+  );
   refreshApp();
 }
 
@@ -732,7 +743,11 @@ export async function unlockRowsAction(formData: FormData): Promise<void> {
     return;
   }
 
-  await unlockRows(actor, sheetId, rowIndexes);
+  const snapshot = await unlockRows(actor, sheetId, rowIndexes);
+  await mirrorSheetRowsToRealtimeDatabase(
+    snapshot,
+    snapshot.rows.filter((row) => rowIndexes.includes(row.rowNumber))
+  );
   refreshApp();
 }
 
@@ -745,6 +760,10 @@ export async function resetRowsAction(formData: FormData): Promise<void> {
     return;
   }
 
-  await resetRows(actor, sheetId, rowIndexes);
+  const snapshot = await resetRows(actor, sheetId, rowIndexes);
+  await mirrorSheetRowsToRealtimeDatabase(
+    snapshot,
+    snapshot.rows.filter((row) => rowIndexes.includes(row.rowNumber))
+  );
   refreshApp();
 }
