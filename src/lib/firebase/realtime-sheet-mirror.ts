@@ -1,4 +1,5 @@
 import type { ColumnKey } from "@/lib/constants";
+import { isRealtimeDatabaseSource } from "@/lib/data-source";
 import type {
   AuditLogState,
   CellFormatState,
@@ -12,7 +13,7 @@ const FORBIDDEN_RTDB_KEY_CHARS = /[.#$/[\]]/g;
 const DEFAULT_MIRROR_TIMEOUT_MS = 2500;
 
 function isRealtimeMirrorEnabled(force = false): boolean {
-  return force || process.env.ENABLE_RTDB_MIRROR === "true";
+  return force || (!isRealtimeDatabaseSource() && process.env.ENABLE_RTDB_MIRROR === "true");
 }
 
 function safeKey(value: string | number): string {

@@ -187,7 +187,8 @@ export function buildRowsFromCells(
   snapshot: Omit<SheetSnapshot, "rows">,
   cells: CellState[],
   ownerships: RowOwnershipState[],
-  formats: CellFormatEntryState[] = []
+  formats: CellFormatEntryState[] = [],
+  rowMeta: Map<number, { lastEditedBy: string | null; updatedAt: string | null }> = new Map()
 ): SheetGridRow[] {
   const cellLookup = new Map(cells.map((cell) => [getCellKey(cell.rowIndex, cell.columnKey), cell]));
   const formatLookup = new Map(
@@ -243,12 +244,14 @@ export function buildRowsFromCells(
       lockReason[columnKey] = decision.reason;
     }
 
+    const meta = rowMeta.get(rowIndex);
+
     rows.push({
       rowNumber: rowIndex,
       ownerId: ownership?.ownerId ?? null,
       ownerName: ownership?.ownerName ?? null,
-      lastEditedBy: null,
-      updatedAt: ownership?.updatedAt ?? null,
+      lastEditedBy: meta?.lastEditedBy ?? null,
+      updatedAt: meta?.updatedAt ?? ownership?.updatedAt ?? null,
       __computed: computed,
       __formula: formulas,
       __cellUpdatedAt: cellUpdatedAt,

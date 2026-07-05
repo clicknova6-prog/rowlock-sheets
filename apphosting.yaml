@@ -1,5 +1,5 @@
 # Firebase App Hosting runs this Next.js custom server through `npm run start`.
-# Keep maxInstances conservative while Cloud SQL usage is being validated.
+# Keep maxInstances conservative while RTDB source mode is being validated.
 runConfig:
   cpu: 1
   memoryMiB: 1024
@@ -14,6 +14,11 @@ env:
       - RUNTIME
   - variable: SKIP_AUTH
     value: "false"
+    availability:
+      - BUILD
+      - RUNTIME
+  - variable: SHEET_DATA_SOURCE
+    value: "rtdb"
     availability:
       - BUILD
       - RUNTIME
@@ -102,7 +107,7 @@ env:
     availability:
       - RUNTIME
   - variable: ENABLE_RTDB_MIRROR
-    value: "true"
+    value: "false"
     availability:
       - RUNTIME
   - variable: FIREBASE_DATABASE_URL

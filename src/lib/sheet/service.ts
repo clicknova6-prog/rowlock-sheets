@@ -3,6 +3,7 @@ import { Prisma } from "@/generated/prisma/client";
 import { AuditAction, Role } from "@/generated/prisma/enums";
 import { COLUMN_KEYS, assertColumnKey, getCellKey, isValidRowIndex } from "@/lib/constants";
 import type { ColumnKey } from "@/lib/constants";
+import { isRealtimeDatabaseSource } from "@/lib/data-source";
 import { prisma } from "@/lib/db";
 import {
   createDefaultCellFormat,
@@ -17,6 +18,7 @@ import {
   normalizeSheetFontSize
 } from "./formatting";
 import { normalizeCellInput, recalculateCells, mergeRecalculatedCells } from "./formulas";
+import { SheetRuleError } from "./errors";
 import { getCellEditDecision } from "./permissions";
 import { evaluateConditionalRules } from "./rules";
 import { getSheetSnapshot, mapConditionalRule, mapValidationRule } from "./snapshot";
@@ -38,12 +40,7 @@ const DETAILED_BULK_AUDIT_LIMIT = 100;
 const BULK_SQL_WRITE_CHUNK_SIZE = 200;
 const BULK_AUDIT_CELL_REFERENCE_LIMIT = 500;
 
-export class SheetRuleError extends Error {
-  constructor(message: string, public readonly status = 400) {
-    super(message);
-    this.name = "SheetRuleError";
-  }
-}
+export { SheetRuleError } from "./errors";
 
 export interface UpdateCellInput {
   sheetId: string;
@@ -97,6 +94,10 @@ export interface UpdateColumnRuleSettingsInput {
 
 export interface UpdateSheetViewSettingsInput {
   sheetId: string;
+  alternateRowColors?: boolean;
+  alternateOddColor?: string;
+  alternateEvenColor?: string;
+  fontSize?: number | string;
   columnWidths?: Record<string, number>;
   condensedView?: boolean;
   frozenHeaderRowIndex?: number | null;
@@ -456,6 +457,11 @@ export async function claimRowForEdit(
   actor: Actor,
   input: ClaimRowForEditInput
 ): Promise<SheetSnapshot> {
+  if (isRealtimeDatabaseSource()) {
+    const { claimRealtimeRowForEdit } = await import("./rtdb-service");
+    return claimRealtimeRowForEdit(actor, input);
+  }
+
   const columnKey = assertColumnKey(input.columnKey);
 
   if (!isValidRowIndex(input.rowIndex)) {
@@ -479,6 +485,11 @@ export async function updateCell(
   actor: Actor,
   input: UpdateCellInput
 ): Promise<SheetSnapshot> {
+  if (isRealtimeDatabaseSource()) {
+    const { updateRealtimeCell } = await import("./rtdb-service");
+    return updateRealtimeCell(actor, input);
+  }
+
   const columnKey = assertColumnKey(input.columnKey);
 
   if (!isValidRowIndex(input.rowIndex)) {
@@ -753,6 +764,11 @@ export async function bulkUpdateCells(
   actor: Actor,
   input: BulkUpdateCellInput
 ): Promise<SheetSnapshot> {
+  if (isRealtimeDatabaseSource()) {
+    const { bulkUpdateRealtimeCells } = await import("./rtdb-service");
+    return bulkUpdateRealtimeCells(actor, input);
+  }
+
   const normalizedUpdates = input.updates.map((update) => ({
     rowIndex: update.rowIndex,
     columnKey: assertColumnKey(update.columnKey),
@@ -989,6 +1005,11 @@ export async function updateCellFormats(
   actor: Actor,
   input: UpdateCellFormatsInput
 ): Promise<SheetSnapshot> {
+  if (isRealtimeDatabaseSource()) {
+    const { updateRealtimeCellFormats } = await import("./rtdb-service");
+    return updateRealtimeCellFormats(actor, input);
+  }
+
   if (actor.role !== Role.ADMIN) {
     throw new SheetRuleError("Only admins can format cells.", 403);
   }
@@ -1123,6 +1144,11 @@ export async function updateColumnRuleSettings(
   actor: Actor,
   input: UpdateColumnRuleSettingsInput
 ): Promise<SheetSnapshot> {
+  if (isRealtimeDatabaseSource()) {
+    const { updateRealtimeColumnRuleSettings } = await import("./rtdb-service");
+    return updateRealtimeColumnRuleSettings(actor, input);
+  }
+
   if (actor.role !== Role.ADMIN) {
     throw new SheetRuleError("Only admins can update column rules.", 403);
   }
@@ -1210,6 +1236,11 @@ export async function updateSheetViewSettings(
   actor: Actor,
   input: UpdateSheetViewSettingsInput
 ): Promise<SheetViewSettingState> {
+  if (isRealtimeDatabaseSource()) {
+    const { updateRealtimeSheetViewSettings } = await import("./rtdb-service");
+    return updateRealtimeSheetViewSettings(actor, input);
+  }
+
   if (actor.role !== Role.ADMIN) {
     throw new SheetRuleError("Only admins can save sheet view settings.", 403);
   }
@@ -1232,6 +1263,19 @@ export async function updateSheetViewSettings(
       : input.memberEditLockAt
         ? new Date(input.memberEditLockAt)
         : null;
+  const alternateRowColors = input.alternateRowColors;
+  const alternateOddColor =
+    input.alternateOddColor === undefined
+      ? undefined
+      : normalizeHexColor(input.alternateOddColor) ??
+        DEFAULT_SHEET_VIEW_SETTING.alternateOddColor;
+  const alternateEvenColor =
+    input.alternateEvenColor === undefined
+      ? undefined
+      : normalizeHexColor(input.alternateEvenColor) ??
+        DEFAULT_SHEET_VIEW_SETTING.alternateEvenColor;
+  const fontSize =
+    input.fontSize === undefined ? undefined : normalizeSheetFontSize(input.fontSize);
 
   await prisma.sheet.findUniqueOrThrow({
     where: { id: input.sheetId },
@@ -1239,6 +1283,10 @@ export async function updateSheetViewSettings(
   });
 
   const updateData = {
+    ...(alternateRowColors === undefined ? {} : { alternateRowColors }),
+    ...(alternateOddColor === undefined ? {} : { alternateOddColor }),
+    ...(alternateEvenColor === undefined ? {} : { alternateEvenColor }),
+    ...(fontSize === undefined ? {} : { fontSize }),
     ...(columnWidths === undefined ? {} : { columnWidths }),
     ...(condensedView === undefined ? {} : { condensedView }),
     ...(frozenHeaderRowIndex === undefined ? {} : { frozenHeaderRowIndex }),
@@ -1249,10 +1297,11 @@ export async function updateSheetViewSettings(
     where: { sheetId: input.sheetId },
     create: {
       sheetId: input.sheetId,
-      alternateRowColors: DEFAULT_SHEET_VIEW_SETTING.alternateRowColors,
-      alternateOddColor: DEFAULT_SHEET_VIEW_SETTING.alternateOddColor,
-      alternateEvenColor: DEFAULT_SHEET_VIEW_SETTING.alternateEvenColor,
-      fontSize: DEFAULT_SHEET_VIEW_SETTING.fontSize,
+      alternateRowColors:
+        alternateRowColors ?? DEFAULT_SHEET_VIEW_SETTING.alternateRowColors,
+      alternateOddColor: alternateOddColor ?? DEFAULT_SHEET_VIEW_SETTING.alternateOddColor,
+      alternateEvenColor: alternateEvenColor ?? DEFAULT_SHEET_VIEW_SETTING.alternateEvenColor,
+      fontSize: fontSize ?? DEFAULT_SHEET_VIEW_SETTING.fontSize,
       columnWidths: columnWidths ?? DEFAULT_SHEET_VIEW_SETTING.columnWidths,
       condensedView: condensedView ?? DEFAULT_SHEET_VIEW_SETTING.condensedView,
       frozenHeaderRowIndex:
@@ -1292,6 +1341,11 @@ export async function updateSheetViewSettings(
 }
 
 export async function unlockAllRows(actor: Actor, sheetId: string): Promise<SheetSnapshot> {
+  if (isRealtimeDatabaseSource()) {
+    const { unlockAllRealtimeRows } = await import("./rtdb-service");
+    return unlockAllRealtimeRows(actor, sheetId);
+  }
+
   if (actor.role !== Role.ADMIN) {
     throw new SheetRuleError("Only admins can unlock rows.", 403);
   }
@@ -1324,6 +1378,11 @@ export async function resetRows(
   sheetId: string,
   rowIndexes: number[]
 ): Promise<SheetSnapshot> {
+  if (isRealtimeDatabaseSource()) {
+    const { resetRealtimeRows } = await import("./rtdb-service");
+    return resetRealtimeRows(actor, sheetId, rowIndexes);
+  }
+
   if (actor.role !== Role.ADMIN) {
     throw new SheetRuleError("Only admins can reset rows.", 403);
   }
@@ -1411,6 +1470,11 @@ export async function getCellHistory(
   actor: Actor,
   input: GetCellHistoryInput
 ): Promise<CellHistoryEntryState[]> {
+  if (isRealtimeDatabaseSource()) {
+    const { getRealtimeCellHistory } = await import("./rtdb-service");
+    return getRealtimeCellHistory(actor, input);
+  }
+
   if (actor.role !== Role.ADMIN) {
     throw new SheetRuleError("Only admins can view cell history.", 403);
   }
@@ -1466,6 +1530,11 @@ export async function unlockRows(
   sheetId: string,
   rowIndexes: number[]
 ): Promise<SheetSnapshot> {
+  if (isRealtimeDatabaseSource()) {
+    const { unlockRealtimeRows } = await import("./rtdb-service");
+    return unlockRealtimeRows(actor, sheetId, rowIndexes);
+  }
+
   if (actor.role !== Role.ADMIN) {
     throw new SheetRuleError("Only admins can unlock rows.", 403);
   }

@@ -136,7 +136,7 @@ Firestore spreadsheet realtime events are stored in:
 sheetRealtime/{sheetId}/events/{eventId}
 ```
 
-These event documents are a lightweight notification layer only. The actual spreadsheet source of truth remains Cloud SQL/MySQL through Prisma.
+These event documents are a lightweight notification layer only. The spreadsheet source of truth is selected by `SHEET_DATA_SOURCE`.
 
 ### Realtime Database Mirror Migration
 
@@ -175,6 +175,27 @@ Rollback while SQL is still active:
 # Set ENABLE_RTDB_MIRROR=false in App Hosting, then redeploy/roll out main.
 ```
 
+### Realtime Database Source Test
+
+Set `SHEET_DATA_SOURCE=rtdb` to run spreadsheet reads/writes from Firebase Realtime Database instead of Cloud SQL. This is reversible: set `SHEET_DATA_SOURCE=sql` and roll out again to return to the Prisma/MySQL path.
+
+Before switching a deployment to RTDB, import the current SQL sheet:
+
+```bash
+export ENABLE_RTDB_MIRROR=true
+npm run rtdb:sync
+```
+
+For the RTDB source test:
+
+```bash
+# App Hosting currently uses this in apphosting.yaml:
+SHEET_DATA_SOURCE=rtdb
+ENABLE_RTDB_MIRROR=false
+```
+
+In RTDB source mode, the server still uses Firebase Auth for login and Firestore for lightweight realtime event notifications. Cloud SQL is not used for normal login, sheet loading, cell edits, formatting, row reset/unlock, column permissions, validation rules, conditional rules, or member password management.
+
 Set `FIREBASE_ADMIN_EMAILS` to a comma-separated list of emails that should become admins the first time they sign in. It is currently set to `clicknova6@gmail.com` in `apphosting.yaml`. Existing Firestore user documents keep their saved role.
 
 Cloud Firestore is enabled and the default Standard database has been created in `nam5`.
@@ -187,13 +208,13 @@ npx -y firebase-tools@latest deploy --only firestore --project jobsheet-291c1
 
 ## Firebase App Hosting Deployment
 
-Firebase is the chosen deployment target. The current Firebase phase uses Firebase Authentication, Firestore user profiles/realtime events, and Cloud SQL MySQL for durable spreadsheet data.
+Firebase is the chosen deployment target. The current test deployment uses Firebase Authentication, Firestore user profiles/realtime events, and Firebase Realtime Database for spreadsheet data when `SHEET_DATA_SOURCE=rtdb`.
 
 ### App Hosting Runtime Shape
 
 Firebase App Hosting uses the framework adapter, so it does not rely on Socket.io. `apphosting.yaml` sets `NEXT_PUBLIC_ENABLE_SOCKET_SYNC=false`; hosted cell edits save through `/api/cells` autosave, then Firestore broadcasts compact realtime events to other open browsers.
 
-`apphosting.yaml` currently keeps `maxInstances: 1` to control Cloud SQL cost and connection pressure while usage is being validated. You can raise it later after checking database connections and write behavior under real employee traffic.
+`apphosting.yaml` currently keeps `maxInstances: 1` while the RTDB source test is being validated. You can raise it later after checking write behavior under real employee traffic.
 
 You can set `minInstances: 1` later for fewer cold starts. `minInstances: 0` keeps cost lower.
 
@@ -206,7 +227,7 @@ You can set `minInstances: 1` later for fewer cold starts. `minInstances: 0` kee
    - URL: `https://rowlock-sheets--jobsheet-291c1.us-central1.hosted.app`
 3. Add App Hosting secrets:
    - `AUTH_SECRET`
-   - `DATABASE_URL` while spreadsheet data is still in Prisma/MySQL
+   - `DATABASE_URL` only for SQL mode or rollback
 4. Replace `FIREBASE_ADMIN_EMAILS` in `apphosting.yaml` if you want different admin accounts.
 5. Deploy from the Firebase App Hosting GitHub integration.
 
@@ -222,7 +243,7 @@ The app also supports a normal TCP MySQL URL:
 DATABASE_URL="mysql://USER:PASSWORD@HOST:3306/DATABASE"
 ```
 
-After the first successful Firebase build, run the Prisma migrations against the production database:
+For SQL mode, after the first successful Firebase build, run the Prisma migrations against the production database:
 
 ```bash
 npm run prisma:deploy

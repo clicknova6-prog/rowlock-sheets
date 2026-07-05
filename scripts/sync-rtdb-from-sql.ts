@@ -1,12 +1,27 @@
 import "dotenv/config";
-import { Role } from "@/generated/prisma/enums";
-import { prisma } from "@/lib/db";
-import { firebaseAdminRealtimeDb } from "@/lib/firebase/admin";
-import { mirrorSheetSnapshotToRealtimeDatabase } from "@/lib/firebase/realtime-sheet-mirror";
-import { getSheetSnapshot } from "@/lib/sheet/snapshot";
+import type { prisma as prismaClient } from "@/lib/db";
 import type { Actor } from "@/lib/sheet/types";
 
+process.env.SHEET_DATA_SOURCE = "sql";
+
+let prisma: typeof prismaClient | null = null;
+
 async function main(): Promise<void> {
+  const [
+    { Role },
+    db,
+    { firebaseAdminRealtimeDb },
+    { mirrorSheetSnapshotToRealtimeDatabase },
+    { getSheetSnapshot }
+  ] = await Promise.all([
+    import("@/generated/prisma/enums"),
+    import("@/lib/db"),
+    import("@/lib/firebase/admin"),
+    import("@/lib/firebase/realtime-sheet-mirror"),
+    import("@/lib/sheet/snapshot")
+  ]);
+  prisma = db.prisma;
+
   const sheet = await prisma.sheet.findFirst({
     orderBy: { createdAt: "asc" },
     select: { id: true }
@@ -41,6 +56,7 @@ async function main(): Promise<void> {
 
   await mirrorSheetSnapshotToRealtimeDatabase(snapshot, { force: true });
   console.log(`Mirrored sheet ${snapshot.sheet.name} (${snapshot.sheet.id}) to Realtime Database.`);
+  firebaseAdminRealtimeDb.goOffline();
 }
 
 main()
@@ -49,6 +65,5 @@ main()
     process.exitCode = 1;
   })
   .finally(async () => {
-    firebaseAdminRealtimeDb.goOffline();
-    await prisma.$disconnect();
+    await prisma?.$disconnect();
   });

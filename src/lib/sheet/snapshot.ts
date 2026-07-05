@@ -1,6 +1,7 @@
 import { Role, RuleJoinOperator } from "@/generated/prisma/enums";
 import { COLUMN_KEYS, MAX_ROWS, assertColumnKey, getCellKey } from "@/lib/constants";
 import type { ColumnKey } from "@/lib/constants";
+import { isRealtimeDatabaseSource } from "@/lib/data-source";
 import { prisma } from "@/lib/db";
 import {
   DEFAULT_SHEET_VIEW_SETTING,
@@ -196,6 +197,11 @@ function getMatchHighlightedRows(
 }
 
 export async function getDefaultSheetId(): Promise<string | null> {
+  if (isRealtimeDatabaseSource()) {
+    const { getDefaultRealtimeSheetId } = await import("./rtdb-service");
+    return getDefaultRealtimeSheetId();
+  }
+
   const sheet = await prisma.sheet.findFirst({
     orderBy: { createdAt: "asc" },
     select: { id: true }
@@ -208,6 +214,11 @@ export async function getSheetSnapshot(
   sheetId: string,
   currentUser: Actor
 ): Promise<SheetSnapshot> {
+  if (isRealtimeDatabaseSource()) {
+    const { getRealtimeSheetSnapshot } = await import("./rtdb-service");
+    return getRealtimeSheetSnapshot(sheetId, currentUser);
+  }
+
   const [
     sheet,
     cells,

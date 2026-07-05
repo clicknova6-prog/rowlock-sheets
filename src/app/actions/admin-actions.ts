@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { AuditAction, RuleJoinOperator, RuleOperator } from "@/generated/prisma/enums";
 import { requireAdmin } from "@/lib/auth/session";
 import { COLUMN_KEYS, assertColumnKey, isValidRowIndex } from "@/lib/constants";
+import { isRealtimeDatabaseSource } from "@/lib/data-source";
 import { prisma } from "@/lib/db";
 import {
   createFirebaseMember,
@@ -16,7 +17,12 @@ import {
 } from "@/lib/firebase/realtime-sheet-mirror";
 import { publishSheetRealtimeEvent } from "@/lib/firebase/sheet-realtime";
 import { parseRowIndexList } from "@/lib/sheet/row-index-list";
-import { resetRows, unlockRow, unlockRows } from "@/lib/sheet/service";
+import {
+  resetRows,
+  unlockRow,
+  unlockRows,
+  updateSheetViewSettings
+} from "@/lib/sheet/service";
 import { getSheetSnapshot } from "@/lib/sheet/snapshot";
 import {
   DEFAULT_SHEET_VIEW_SETTING,
@@ -119,6 +125,10 @@ async function auditAdminChange(
   action: AuditAction,
   message: string
 ): Promise<void> {
+  if (isRealtimeDatabaseSource()) {
+    return;
+  }
+
   await prisma.auditLog.create({
     data: {
       sheetId,
@@ -137,7 +147,10 @@ function refreshApp(): void {
 async function publishSheetSettingsRefresh(sheetId: string, actor: Actor): Promise<void> {
   const snapshot = await getSheetSnapshot(sheetId, actor);
 
-  await mirrorSheetConfigToRealtimeDatabase(snapshot);
+  if (!isRealtimeDatabaseSource()) {
+    await mirrorSheetConfigToRealtimeDatabase(snapshot);
+  }
+
   await publishSheetRealtimeEvent({
     type: "format-changed",
     sheetId,
@@ -300,6 +313,27 @@ export async function saveColumnPermissionsAction(formData: FormData): Promise<v
     };
   });
 
+  if (isRealtimeDatabaseSource()) {
+    const { replaceRealtimeColumnPermissions } = await import("@/lib/sheet/rtdb-service");
+    await replaceRealtimeColumnPermissions(
+      actor,
+      sheetId,
+      permissions.map((permission) => ({
+        columnKey: permission.columnKey,
+        editableByMember: permission.editableByMember,
+        claimRowOnEdit: permission.claimRowOnEdit,
+        memberWriteOnce: permission.memberWriteOnce,
+        memberEditDelaySourceColumnKey: permission.memberEditDelaySourceColumnKey,
+        memberEditDelayMinutes: permission.memberEditDelayMinutes,
+        duplicateHighlight: permission.duplicateHighlight,
+        matchHighlightTerms: permission.matchHighlightTerms
+      }))
+    );
+    await publishSheetSettingsRefresh(sheetId, actor);
+    refreshApp();
+    return;
+  }
+
   await prisma.$transaction(
     async (tx) => {
       await tx.columnPermission.deleteMany({ where: { sheetId } });
@@ -334,6 +368,21 @@ export async function saveSheetViewSettingsAction(formData: FormData): Promise<v
   const frozenHeaderRowIndex = normalizeSheetFrozenHeaderRowIndex(
     getString(formData, "frozenHeaderRowIndex")
   );
+
+  if (isRealtimeDatabaseSource()) {
+    await updateSheetViewSettings(actor, {
+      sheetId,
+      alternateRowColors,
+      alternateOddColor,
+      alternateEvenColor,
+      fontSize,
+      condensedView,
+      frozenHeaderRowIndex
+    });
+    await publishSheetSettingsRefresh(sheetId, actor);
+    refreshApp();
+    return;
+  }
 
   await prisma.$transaction(async (tx) => {
     await tx.sheetViewSetting.upsert({
@@ -381,6 +430,21 @@ export async function saveValidationRuleAction(formData: FormData): Promise<void
   const enabled = formData.has("enabled");
 
   if (allowedValues.length === 0) {
+    return;
+  }
+
+  if (isRealtimeDatabaseSource()) {
+    const { saveRealtimeValidationRule } = await import("@/lib/sheet/rtdb-service");
+    await saveRealtimeValidationRule(actor, {
+      sheetId,
+      id: id || undefined,
+      columnKey,
+      name,
+      allowedValues,
+      enabled
+    });
+    await publishSheetSettingsRefresh(sheetId, actor);
+    refreshApp();
     return;
   }
 
@@ -472,6 +536,14 @@ export async function deleteValidationRuleAction(formData: FormData): Promise<vo
     return;
   }
 
+  if (isRealtimeDatabaseSource()) {
+    const { deleteRealtimeValidationRule } = await import("@/lib/sheet/rtdb-service");
+    await deleteRealtimeValidationRule(actor, sheetId, id);
+    await publishSheetSettingsRefresh(sheetId, actor);
+    refreshApp();
+    return;
+  }
+
   await prisma.validationRule.delete({ where: { id } });
   await auditAdminChange(
     sheetId,
@@ -523,6 +595,27 @@ export async function saveConditionalRuleAction(formData: FormData): Promise<voi
     .filter(Boolean);
 
   if (conditions.length === 0) {
+    return;
+  }
+
+  if (isRealtimeDatabaseSource()) {
+    const { saveRealtimeConditionalRule } = await import("@/lib/sheet/rtdb-service");
+    await saveRealtimeConditionalRule(actor, {
+      sheetId,
+      id: id || undefined,
+      name,
+      description,
+      limitCount,
+      enabled,
+      conditions: conditions.map((condition) => ({
+        columnKey: condition!.columnKey,
+        operator: condition!.operator,
+        joinOperator: condition!.joinOperator,
+        values: condition!.values
+      }))
+    });
+    await publishSheetSettingsRefresh(sheetId, actor);
+    refreshApp();
     return;
   }
 
@@ -585,6 +678,14 @@ export async function deleteConditionalRuleAction(formData: FormData): Promise<v
     return;
   }
 
+  if (isRealtimeDatabaseSource()) {
+    const { deleteRealtimeConditionalRule } = await import("@/lib/sheet/rtdb-service");
+    await deleteRealtimeConditionalRule(actor, sheetId, id);
+    await publishSheetSettingsRefresh(sheetId, actor);
+    refreshApp();
+    return;
+  }
+
   await prisma.conditionalRule.delete({ where: { id } });
   await auditAdminChange(
     sheetId,
@@ -619,6 +720,14 @@ export async function deleteOldAuditHistoryAction(formData: FormData): Promise<v
   const sheetId = getString(formData, "sheetId");
   const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000);
 
+  if (isRealtimeDatabaseSource()) {
+    const { deleteRealtimeAuditHistory } = await import("@/lib/sheet/rtdb-service");
+    await deleteRealtimeAuditHistory(actor, sheetId, { olderThanIso: cutoff.toISOString() });
+    await publishSheetSettingsRefresh(sheetId, actor);
+    refreshApp();
+    return;
+  }
+
   const result = await prisma.auditLog.deleteMany({
     where: {
       sheetId,
@@ -645,6 +754,14 @@ export async function deleteAllAuditHistoryAction(formData: FormData): Promise<v
   const actor = await requireAdmin();
   const sheetId = getString(formData, "sheetId");
 
+  if (isRealtimeDatabaseSource()) {
+    const { deleteRealtimeAuditHistory } = await import("@/lib/sheet/rtdb-service");
+    await deleteRealtimeAuditHistory(actor, sheetId);
+    await publishSheetSettingsRefresh(sheetId, actor);
+    refreshApp();
+    return;
+  }
+
   await prisma.auditLog.deleteMany({
     where: { sheetId }
   });
@@ -663,6 +780,16 @@ export async function scheduleMemberSheetLockAction(formData: FormData): Promise
   }
 
   const memberEditLockAt = new Date(Date.now() + delayMinutes * 60 * 1000);
+
+  if (isRealtimeDatabaseSource()) {
+    await updateSheetViewSettings(actor, {
+      sheetId,
+      memberEditLockAt
+    });
+    await publishSheetSettingsRefresh(sheetId, actor);
+    refreshApp();
+    return;
+  }
 
   await prisma.$transaction(async (tx) => {
     await tx.sheetViewSetting.upsert({
@@ -702,6 +829,16 @@ export async function scheduleMemberSheetLockAction(formData: FormData): Promise
 export async function unlockMemberSheetEditingAction(formData: FormData): Promise<void> {
   const actor = await requireAdmin();
   const sheetId = getString(formData, "sheetId");
+
+  if (isRealtimeDatabaseSource()) {
+    await updateSheetViewSettings(actor, {
+      sheetId,
+      memberEditLockAt: null
+    });
+    await publishSheetSettingsRefresh(sheetId, actor);
+    refreshApp();
+    return;
+  }
 
   await prisma.$transaction(async (tx) => {
     await tx.sheetViewSetting.upsert({

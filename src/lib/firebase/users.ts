@@ -1,6 +1,7 @@
 import type { DecodedIdToken } from "firebase-admin/auth";
 import { FieldValue } from "firebase-admin/firestore";
 import { Role } from "@/generated/prisma/enums";
+import { isRealtimeDatabaseSource } from "@/lib/data-source";
 import type { Actor, AdminMemberState } from "@/lib/sheet/types";
 import { firebaseAdminAuth, firebaseAdminDb } from "./admin";
 import {
@@ -38,7 +39,30 @@ function getDisplayName(token: DecodedIdToken): string {
   return token.name || email.split("@")[0] || "User";
 }
 
+function timestampToIso(value: unknown): string {
+  if (
+    value &&
+    typeof value === "object" &&
+    "toDate" in value &&
+    typeof (value as { toDate?: unknown }).toDate === "function"
+  ) {
+    const date = (value as { toDate: () => Date }).toDate();
+    return Number.isFinite(date.getTime()) ? date.toISOString() : new Date().toISOString();
+  }
+
+  if (typeof value === "string") {
+    const date = new Date(value);
+    return Number.isFinite(date.getTime()) ? date.toISOString() : new Date().toISOString();
+  }
+
+  return new Date().toISOString();
+}
+
 async function syncPrismaUser(actor: Actor): Promise<void> {
+  if (isRealtimeDatabaseSource()) {
+    return;
+  }
+
   const { prisma } = await import("@/lib/db");
 
   await prisma.user.upsert({
@@ -67,6 +91,58 @@ function isFirebaseAuthError(error: unknown, code: string): boolean {
   );
 }
 
+async function getMemberProfileFromFirestore(memberId: string): Promise<Actor> {
+  const userSnapshot = await firebaseAdminDb.collection("users").doc(memberId).get();
+
+  if (!userSnapshot.exists) {
+    throw new Error("Member was not found.");
+  }
+
+  const profile = userSnapshot.data() as FirebaseUserProfile;
+
+  if (!profile.email || normalizeRole(profile.role) !== Role.MEMBER) {
+    throw new Error("Member was not found.");
+  }
+
+  return {
+    id: memberId,
+    email: profile.email.toLowerCase(),
+    name: profile.name ?? profile.email,
+    role: Role.MEMBER
+  };
+}
+
+async function listFirebaseMembersFromFirestore(): Promise<AdminMemberState[]> {
+  const snapshot = await firebaseAdminDb.collection("users").where("role", "==", Role.MEMBER).get();
+
+  return snapshot.docs
+    .map((doc) => {
+      const data = doc.data() as FirebaseUserProfile & {
+        createdAt?: unknown;
+        updatedAt?: unknown;
+      };
+      const email = data.email?.toLowerCase();
+
+      if (!email) {
+        return null;
+      }
+
+      return {
+        id: doc.id,
+        email,
+        name: data.name ?? email,
+        role: Role.MEMBER,
+        createdAt: timestampToIso(data.createdAt),
+        updatedAt: timestampToIso(data.updatedAt),
+        ownedRowCount: 0,
+        updatedCellCount: 0,
+        editedRowCount: 0
+      } satisfies AdminMemberState;
+    })
+    .filter(Boolean)
+    .sort((a, b) => b!.createdAt.localeCompare(a!.createdAt) || a!.email.localeCompare(b!.email)) as AdminMemberState[];
+}
+
 export async function createFirebaseMember({
   email,
   name,
@@ -74,14 +150,17 @@ export async function createFirebaseMember({
 }: CreateFirebaseMemberInput): Promise<Actor> {
   const normalizedEmail = email.trim().toLowerCase();
   const displayName = name.trim() || normalizedEmail.split("@")[0] || "Member";
-  const { prisma } = await import("@/lib/db");
-  const existingPrismaUser = await prisma.user.findUnique({
-    where: { email: normalizedEmail },
-    select: { id: true }
-  });
 
-  if (existingPrismaUser) {
-    throw new Error("A member with this email already exists.");
+  if (!isRealtimeDatabaseSource()) {
+    const { prisma } = await import("@/lib/db");
+    const existingPrismaUser = await prisma.user.findUnique({
+      where: { email: normalizedEmail },
+      select: { id: true }
+    });
+
+    if (existingPrismaUser) {
+      throw new Error("A member with this email already exists.");
+    }
   }
 
   try {
@@ -129,6 +208,10 @@ export async function createFirebaseMember({
 }
 
 export async function listFirebaseMembers(): Promise<AdminMemberState[]> {
+  if (isRealtimeDatabaseSource()) {
+    return listFirebaseMembersFromFirestore();
+  }
+
   const { prisma } = await import("@/lib/db");
   const members = await prisma.user.findMany({
     where: { role: Role.MEMBER },
@@ -167,6 +250,43 @@ export async function updateFirebaseMemberPassword(
   memberId: string,
   password: string
 ): Promise<Actor> {
+  if (isRealtimeDatabaseSource()) {
+    const member = await getMemberProfileFromFirestore(memberId);
+
+    try {
+      await firebaseAdminAuth.updateUser(member.id, {
+        password,
+        disabled: false
+      });
+    } catch (error) {
+      if (!isFirebaseAuthError(error, "auth/user-not-found")) {
+        throw error;
+      }
+
+      await firebaseAdminAuth.createUser({
+        uid: member.id,
+        email: member.email,
+        password,
+        displayName: member.name,
+        disabled: false,
+        emailVerified: false
+      });
+    }
+
+    await firebaseAdminDb.collection("users").doc(member.id).set(
+      {
+        email: member.email,
+        name: member.name,
+        role: member.role,
+        updatedAt: FieldValue.serverTimestamp()
+      },
+      { merge: true }
+    );
+    await mirrorUserProfileToRealtimeDatabase(member);
+
+    return member;
+  }
+
   const { prisma } = await import("@/lib/db");
   const member = await prisma.user.findUnique({
     where: { id: memberId },
@@ -226,6 +346,23 @@ export async function updateFirebaseMemberPassword(
 }
 
 export async function deleteFirebaseMember(memberId: string): Promise<Actor> {
+  if (isRealtimeDatabaseSource()) {
+    const member = await getMemberProfileFromFirestore(memberId);
+
+    try {
+      await firebaseAdminAuth.deleteUser(member.id);
+    } catch (error) {
+      if (!isFirebaseAuthError(error, "auth/user-not-found")) {
+        throw error;
+      }
+    }
+
+    await firebaseAdminDb.collection("users").doc(member.id).delete();
+    await deleteUserProfileFromRealtimeDatabase(member.id);
+
+    return member;
+  }
+
   const { prisma } = await import("@/lib/db");
   const member = await prisma.user.findUnique({
     where: { id: memberId },

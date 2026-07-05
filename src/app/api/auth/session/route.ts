@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { AuditAction } from "@/generated/prisma/enums";
 import { createSession, clearSession } from "@/lib/auth/session";
+import { isRealtimeDatabaseSource } from "@/lib/data-source";
 import { firebaseAdminAuth } from "@/lib/firebase/admin";
 import { getOrCreateFirebaseActor } from "@/lib/firebase/users";
 
@@ -17,22 +18,24 @@ export async function POST(request: Request): Promise<NextResponse> {
     const actor = await getOrCreateFirebaseActor(decodedToken);
     await createSession(actor);
 
-    try {
-      const { prisma } = await import("@/lib/db");
-      const sheet = await prisma.sheet.findFirst({ select: { id: true } });
+    if (!isRealtimeDatabaseSource()) {
+      try {
+        const { prisma } = await import("@/lib/db");
+        const sheet = await prisma.sheet.findFirst({ select: { id: true } });
 
-      if (sheet) {
-        await prisma.auditLog.create({
-          data: {
-            sheetId: sheet.id,
-            actorId: actor.id,
-            action: AuditAction.USER_SIGNED_IN,
-            message: `${actor.name} signed in with Firebase.`
-          }
-        });
+        if (sheet) {
+          await prisma.auditLog.create({
+            data: {
+              sheetId: sheet.id,
+              actorId: actor.id,
+              action: AuditAction.USER_SIGNED_IN,
+              message: `${actor.name} signed in with Firebase.`
+            }
+          });
+        }
+      } catch (error) {
+        console.warn("Unable to write sign-in audit log.", error);
       }
-    } catch (error) {
-      console.warn("Unable to write sign-in audit log.", error);
     }
 
     return NextResponse.json({ user: actor });
