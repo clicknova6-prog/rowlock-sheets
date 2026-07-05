@@ -13,6 +13,7 @@ import {
   normalizeSheetFrozenHeaderRowIndex,
   normalizeSheetFontSize
 } from "./formatting";
+import { isFormula } from "./formulas";
 import { getCellEditDecision } from "./permissions";
 import type {
   Actor,
@@ -394,9 +395,12 @@ export async function getSheetSnapshot(
     for (const columnKey of COLUMN_KEYS) {
       const cell = cellLookup.get(getCellKey(rowIndex, columnKey));
       const cellFormat = formatLookup.get(getCellKey(rowIndex, columnKey));
-      values[columnKey] = cell?.formula ?? cell?.value ?? "";
-      computed[columnKey] = cell?.computedValue ?? cell?.value ?? "";
-      formulas[columnKey] = Boolean(cell?.formula);
+      const formula = cell?.formula && isFormula(cell.formula) ? cell.formula : null;
+      values[columnKey] = formula ?? cell?.value ?? "";
+      computed[columnKey] = formula
+        ? cell?.computedValue ?? cell?.value ?? ""
+        : cell?.computedValue || cell?.value || "";
+      formulas[columnKey] = Boolean(formula);
       format[columnKey] = cellFormat ?? createDefaultCellFormat();
 
       const updatedAt = serializeCellUpdatedAt(cell?.updatedAt);

@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { Role, RuleJoinOperator, RuleOperator } from "@/generated/prisma/enums";
+import { COLUMN_KEYS } from "@/lib/constants";
+import { buildRowsFromCells } from "@/lib/sheet/demo-engine";
 import { getCellEditDecision } from "@/lib/sheet/permissions";
 import { parseRowIndexList } from "@/lib/sheet/row-index-list";
 import { getRowsForPersistedCellUpdates } from "@/lib/sheet/row-payloads";
@@ -438,6 +440,54 @@ describe("formula recalculation", () => {
 
     expect(sumCell?.computedValue).toBe("60");
     expect(arithmeticCell?.computedValue).toBe("50");
+  });
+});
+
+describe("sheet row building", () => {
+  it("uses the raw value when persisted formula is an empty string", () => {
+    const rows = buildRowsFromCells(
+      {
+        currentUser: {
+          id: "admin",
+          name: "Admin",
+          email: "admin@example.com",
+          role: Role.ADMIN
+        },
+        sheet: {
+          id: "sheet-1",
+          name: "Operations Tracker"
+        },
+        columns: [...COLUMN_KEYS],
+        viewSetting: {
+          alternateRowColors: false,
+          alternateOddColor: "#ffffff",
+          alternateEvenColor: "#f8fafc",
+          fontSize: 14,
+          columnWidths: {},
+          condensedView: false,
+          frozenHeaderRowIndex: null,
+          memberEditLockAt: null
+        },
+        columnPermissions: [],
+        validationRules: [],
+        conditionalRules: [],
+        auditLogs: []
+      },
+      [
+        {
+          rowIndex: 5,
+          columnKey: "C",
+          value: "gdhdh",
+          formula: "",
+          computedValue: ""
+        }
+      ],
+      []
+    );
+
+    expect(rows[4].C).toBe("gdhdh");
+    expect(rows[4].__computed.C).toBe("gdhdh");
+    expect(rows[4].__formula.C).toBe(false);
   });
 });
 

@@ -7,7 +7,7 @@ import {
   mergeCellFormat,
   normalizeFormatPatch
 } from "./formatting";
-import { mergeRecalculatedCells, normalizeCellInput, recalculateCells } from "./formulas";
+import { isFormula, mergeRecalculatedCells, normalizeCellInput, recalculateCells } from "./formulas";
 import { getCellEditDecision } from "./permissions";
 import { evaluateConditionalRules } from "./rules";
 import { validateAllowedValue } from "./validation";
@@ -212,9 +212,12 @@ export function buildRowsFromCells(
     for (const columnKey of COLUMN_KEYS) {
       const cell = cellLookup.get(getCellKey(rowIndex, columnKey));
       const cellFormat = formatLookup.get(getCellKey(rowIndex, columnKey));
-      values[columnKey] = cell?.formula ?? cell?.value ?? "";
-      computed[columnKey] = cell?.computedValue ?? cell?.value ?? "";
-      formulas[columnKey] = Boolean(cell?.formula);
+      const formula = cell?.formula && isFormula(cell.formula) ? cell.formula : null;
+      values[columnKey] = formula ?? cell?.value ?? "";
+      computed[columnKey] = formula
+        ? cell?.computedValue ?? cell?.value ?? ""
+        : cell?.computedValue || cell?.value || "";
+      formulas[columnKey] = Boolean(formula);
       format[columnKey] = cellFormat ?? createDefaultCellFormat();
 
       if (cell?.updatedAt) {

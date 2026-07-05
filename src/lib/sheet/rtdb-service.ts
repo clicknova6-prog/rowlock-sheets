@@ -24,7 +24,7 @@ import {
   normalizeSheetFrozenHeaderRowIndex,
   normalizeSheetFontSize
 } from "./formatting";
-import { mergeRecalculatedCells, normalizeCellInput, recalculateCells } from "./formulas";
+import { isFormula, mergeRecalculatedCells, normalizeCellInput, recalculateCells } from "./formulas";
 import { getCellEditDecision } from "./permissions";
 import { getRowsForPersistedCellUpdates } from "./row-payloads";
 import { evaluateConditionalRules } from "./rules";
@@ -170,11 +170,12 @@ function getMetadataString(metadata: unknown, key: string): string | null {
 }
 
 function getCellRawValue(cell: CellState | undefined): string {
-  return cell?.formula ?? cell?.value ?? "";
+  const formula = cell?.formula && isFormula(cell.formula) ? cell.formula : null;
+  return formula ?? cell?.value ?? "";
 }
 
 function hasClaimableValue(cell: CellState): boolean {
-  return (cell.formula ?? cell.value).trim().length > 0;
+  return getCellRawValue(cell).trim().length > 0;
 }
 
 function upsertEditedCells(cells: CellState[], editedCells: CellState[]): CellState[] {
@@ -365,8 +366,11 @@ function parseRealtimeSheet(
     for (const columnKey of COLUMN_KEYS) {
       const cell = asRecord(asRecord(columns)[columnKey]);
       const value = asString(cell.value);
-      const formula = asNullableString(cell.formula);
-      const computedValue = asString(cell.computedValue, formula ?? value);
+      const rawFormula = asNullableString(cell.formula);
+      const formula = rawFormula && isFormula(rawFormula) ? rawFormula : null;
+      const computedValue = formula
+        ? asString(cell.computedValue, value)
+        : asString(cell.computedValue) || value;
       const updatedAt = asNullableString(cell.updatedAt);
 
       if (value || formula || computedValue || updatedAt) {
@@ -381,6 +385,56 @@ function parseRealtimeSheet(
       }
     }
   }
+  const cellLookup = new Map(cells.map((cell) => [getCellKey(cell.rowIndex, cell.columnKey), cell]));
+  const seenAuditCells = new Set<string>();
+
+  for (const log of auditLogs) {
+    if (
+      log.action !== AuditAction.CELL_UPDATED ||
+      !isValidRowIndex(log.rowIndex ?? 0) ||
+      !COLUMN_KEYS.includes(log.columnKey as ColumnKey)
+    ) {
+      continue;
+    }
+
+    const rowIndex = log.rowIndex as number;
+    const columnKey = log.columnKey as ColumnKey;
+    const cellKey = getCellKey(rowIndex, columnKey);
+
+    if (seenAuditCells.has(cellKey)) {
+      continue;
+    }
+
+    seenAuditCells.add(cellKey);
+
+    const existingCell = cellLookup.get(cellKey);
+
+    if (getCellRawValue(existingCell).trim() || existingCell?.computedValue?.trim()) {
+      continue;
+    }
+
+    const metadata = asRecord(log.metadata);
+    const rawFormula = asNullableString(metadata.formula);
+    const formula = rawFormula && isFormula(rawFormula) ? rawFormula : null;
+    const value = formula ? "" : asString(metadata.value);
+    const computedValue = formula
+      ? asString(metadata.computedValue, value)
+      : asString(metadata.computedValue) || value;
+
+    if (!formula && !value && !computedValue) {
+      continue;
+    }
+
+    cellLookup.set(cellKey, {
+      rowIndex,
+      columnKey,
+      value,
+      formula,
+      computedValue,
+      updatedAt: log.createdAt
+    });
+  }
+  const parsedCells = [...cellLookup.values()];
 
   const ownerships: RowOwnershipState[] = Object.entries(asRecord(data.ownership))
     .map(([rawRowIndex, ownershipValue]) => {
@@ -457,9 +511,9 @@ function parseRealtimeSheet(
   return {
     snapshot: {
       ...snapshotBase,
-      rows: buildRowsFromCells(snapshotBase, cells, ownerships, formats, rowMeta)
+      rows: buildRowsFromCells(snapshotBase, parsedCells, ownerships, formats, rowMeta)
     },
-    cells,
+    cells: parsedCells,
     ownerships,
     formats,
     rowMeta
@@ -481,12 +535,15 @@ function serializeRowCells(row: SheetSnapshot["rows"][number]): Record<ColumnKey
   return Object.fromEntries(
     COLUMN_KEYS.map((columnKey) => {
       const rawValue = String(row[columnKey] ?? "");
+      const formula = row.__formula[columnKey] && isFormula(rawValue) ? rawValue : null;
       return [
         columnKey,
         {
-          value: row.__formula[columnKey] ? "" : rawValue,
-          formula: row.__formula[columnKey] ? rawValue : null,
-          computedValue: row.__computed[columnKey] ?? rawValue,
+          value: formula ? "" : rawValue,
+          formula,
+          computedValue: formula
+            ? row.__computed[columnKey] ?? rawValue
+            : row.__computed[columnKey] || rawValue,
           updatedAt: row.__cellUpdatedAt[columnKey] ?? null
         }
       ];

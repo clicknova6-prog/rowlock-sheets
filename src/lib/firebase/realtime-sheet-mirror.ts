@@ -6,6 +6,7 @@ import type {
   SheetGridRow,
   SheetSnapshot
 } from "@/lib/sheet/types";
+import { isFormula } from "@/lib/sheet/formulas";
 import { firebaseAdminRealtimeDb } from "./admin";
 
 const RTDB_SCHEMA_VERSION = 1;
@@ -68,12 +69,15 @@ function serializeRowCells(
   return Object.fromEntries(
     columns.map((columnKey) => {
       const rawValue = String(row[columnKey] ?? "");
+      const formula = row.__formula[columnKey] && isFormula(rawValue) ? rawValue : null;
       return [
         columnKey,
         {
-          value: row.__formula[columnKey] ? "" : rawValue,
-          formula: row.__formula[columnKey] ? rawValue : null,
-          computedValue: row.__computed[columnKey] ?? rawValue,
+          value: formula ? "" : rawValue,
+          formula,
+          computedValue: formula
+            ? row.__computed[columnKey] ?? rawValue
+            : row.__computed[columnKey] || rawValue,
           updatedAt: row.__cellUpdatedAt?.[columnKey] ?? null
         }
       ];
