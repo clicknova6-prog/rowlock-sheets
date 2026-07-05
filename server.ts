@@ -7,6 +7,7 @@ import { SESSION_COOKIE, verifySessionToken } from "@/lib/auth/token";
 import { getFirebaseActorByUid } from "@/lib/firebase/users";
 import { mirrorSheetRowsToRealtimeDatabase } from "@/lib/firebase/realtime-sheet-mirror";
 import { assertColumnKey, getCellKey, isValidRowIndex } from "@/lib/constants";
+import { isRealtimeDatabaseSource } from "@/lib/data-source";
 import { prisma } from "@/lib/db";
 import { getRowsForPersistedCellUpdates } from "@/lib/sheet/row-payloads";
 import { SheetRuleError, bulkUpdateCells, claimRowForEdit } from "@/lib/sheet/service";
@@ -60,6 +61,10 @@ const SOCKET_MEMBER_WRITE_FLUSH_DELAY_MS = 250;
 const SOCKET_WRITE_FLUSH_CHUNK_SIZE = 1000;
 const sheetWriteQueues = new Map<string, Promise<void>>();
 const pendingCellWriteBuffers = new Map<string, PendingCellWriteBuffer>();
+const socketSyncEnabled =
+  process.env.NEXT_PUBLIC_ENABLE_SOCKET_SYNC !== "false" &&
+  process.env.ENABLE_SOCKET_SYNC !== "false" &&
+  !isRealtimeDatabaseSource();
 
 type SheetSocket = Socket<ClientToServerEvents, ServerToClientEvents> & {
   data: {
@@ -753,6 +758,18 @@ async function main(): Promise<void> {
   const handle = app.getRequestHandler();
 
   await app.prepare();
+
+  if (!socketSyncEnabled) {
+    const httpServer = createServer((request, response) => {
+      void handle(request, response);
+    });
+
+    httpServer.listen(port, hostname, () => {
+      console.log(`Ready on http://${hostname}:${port}`);
+    });
+    return;
+  }
+
   await prisma.cell.updateMany({
     where: { lockedBy: { not: null } },
     data: { lockedBy: null }
