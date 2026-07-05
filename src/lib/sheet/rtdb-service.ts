@@ -26,6 +26,7 @@ import {
 } from "./formatting";
 import { mergeRecalculatedCells, normalizeCellInput, recalculateCells } from "./formulas";
 import { getCellEditDecision } from "./permissions";
+import { getRowsForPersistedCellUpdates } from "./row-payloads";
 import { evaluateConditionalRules } from "./rules";
 import { validateAllowedValue } from "./validation";
 import type {
@@ -504,6 +505,25 @@ function serializeRowFormats(row: SheetSnapshot["rows"][number]): Record<string,
   return Object.keys(formats).length > 0 ? formats : null;
 }
 
+function serializeRowMeta(row: SheetSnapshot["rows"][number]): Record<string, unknown> {
+  return {
+    lastEditedBy: row.lastEditedBy,
+    updatedAt: row.updatedAt,
+    duplicateHighlight: row.__duplicateHighlight,
+    matchHighlight: row.__matchHighlight
+  };
+}
+
+function serializeRowOwnership(row: SheetSnapshot["rows"][number]): Record<string, unknown> | null {
+  return row.ownerId
+    ? {
+        ownerId: row.ownerId,
+        ownerName: row.ownerName,
+        updatedAt: row.updatedAt
+      }
+    : null;
+}
+
 function serializeAuditLogs(auditLogs: AuditLogState[]): Record<string, Omit<AuditLogState, "id">> {
   return Object.fromEntries(
     auditLogs.slice(0, 30).map((log) => [
@@ -548,29 +568,12 @@ function serializeSnapshot(snapshot: SheetSnapshot): RealtimeSheetData {
       snapshot.rows.map((row) => [safeKey(row.rowNumber), serializeRowCells(row)])
     ),
     rowMeta: Object.fromEntries(
-      snapshot.rows.map((row) => [
-        safeKey(row.rowNumber),
-        {
-          lastEditedBy: row.lastEditedBy,
-          updatedAt: row.updatedAt,
-          duplicateHighlight: row.__duplicateHighlight,
-          matchHighlight: row.__matchHighlight
-        }
-      ])
+      snapshot.rows.map((row) => [safeKey(row.rowNumber), serializeRowMeta(row)])
     ),
     ownership: Object.fromEntries(
       snapshot.rows.flatMap((row) =>
         row.ownerId
-          ? [
-              [
-                safeKey(row.rowNumber),
-                {
-                  ownerId: row.ownerId,
-                  ownerName: row.ownerName,
-                  updatedAt: row.updatedAt
-                }
-              ]
-            ]
+          ? [[safeKey(row.rowNumber), serializeRowOwnership(row)]]
           : []
       )
     ),
@@ -588,6 +591,41 @@ async function writeRealtimeSnapshot(snapshot: SheetSnapshot): Promise<void> {
   await firebaseAdminRealtimeDb
     .ref(`sheets/${safeKey(snapshot.sheet.id)}`)
     .set(serializeSnapshot(snapshot));
+}
+
+async function writeRealtimeRows(
+  snapshot: SheetSnapshot,
+  rows: SheetSnapshot["rows"]
+): Promise<void> {
+  if (rows.length === 0) {
+    return;
+  }
+
+  const sheetPath = `sheets/${safeKey(snapshot.sheet.id)}`;
+  const updates: Record<string, unknown> = {
+    [`${sheetPath}/metadata/sourceOfTruth`]: "rtdb",
+    [`${sheetPath}/metadata/updatedAt`]: nowIso(),
+    [`${sheetPath}/audit`]: serializeAuditLogs(snapshot.auditLogs)
+  };
+
+  for (const row of rows) {
+    const rowKey = safeKey(row.rowNumber);
+
+    updates[`${sheetPath}/cells/${rowKey}`] = serializeRowCells(row);
+    updates[`${sheetPath}/rowMeta/${rowKey}`] = serializeRowMeta(row);
+    updates[`${sheetPath}/ownership/${rowKey}`] = serializeRowOwnership(row);
+    updates[`${sheetPath}/formats/${rowKey}`] = serializeRowFormats(row);
+  }
+
+  await firebaseAdminRealtimeDb.ref().update(cleanForRealtimeDatabase(updates));
+}
+
+function selectRowsByIndexes(
+  snapshot: SheetSnapshot,
+  rowIndexes: Iterable<number>
+): SheetSnapshot["rows"] {
+  const wantedRows = new Set(rowIndexes);
+  return snapshot.rows.filter((row) => wantedRows.has(row.rowNumber));
 }
 
 function appendAuditLogs(snapshot: SheetSnapshot, logs: Omit<AuditLogState, "id" | "createdAt">[]): AuditLogState[] {
@@ -899,15 +937,16 @@ export async function updateRealtimeCell(
   input: UpdateCellInput
 ): Promise<SheetSnapshot> {
   const columnKey = assertColumnKey(input.columnKey);
-  const nextSnapshot = applyCellUpdates(await readRealtimeSheet(input.sheetId, actor), actor, [
+  const updates = [
     {
       rowIndex: input.rowIndex,
       columnKey,
       value: input.value
     }
-  ]);
+  ];
+  const nextSnapshot = applyCellUpdates(await readRealtimeSheet(input.sheetId, actor), actor, updates);
 
-  await writeRealtimeSnapshot(nextSnapshot);
+  await writeRealtimeRows(nextSnapshot, getRowsForPersistedCellUpdates(nextSnapshot, updates));
   return nextSnapshot;
 }
 
@@ -922,7 +961,7 @@ export async function bulkUpdateRealtimeCells(
   }));
   const nextSnapshot = applyCellUpdates(await readRealtimeSheet(input.sheetId, actor), actor, updates);
 
-  await writeRealtimeSnapshot(nextSnapshot);
+  await writeRealtimeRows(nextSnapshot, getRowsForPersistedCellUpdates(nextSnapshot, updates));
   return nextSnapshot;
 }
 
@@ -1000,7 +1039,10 @@ export async function updateRealtimeCellFormats(
     ])
   });
 
-  await writeRealtimeSnapshot(nextSnapshot);
+  await writeRealtimeRows(
+    nextSnapshot,
+    nextSnapshot.rows.filter((row) => row.rowNumber >= startRow && row.rowNumber <= endRow)
+  );
   return nextSnapshot;
 }
 
@@ -1215,7 +1257,7 @@ export async function unlockRealtimeRows(
     ])
   });
 
-  await writeRealtimeSnapshot(nextSnapshot);
+  await writeRealtimeRows(nextSnapshot, selectRowsByIndexes(nextSnapshot, targetRowIndexes));
   return nextSnapshot;
 }
 
@@ -1281,7 +1323,22 @@ export async function resetRealtimeRows(
     ])
   });
 
-  await writeRealtimeSnapshot(nextSnapshot);
+  await writeRealtimeRows(
+    nextSnapshot,
+    selectRowsByIndexes(
+      nextSnapshot,
+      new Set([
+        ...targetRowIndexes,
+        ...getRowsForPersistedCellUpdates(
+          nextSnapshot,
+          resetCells.map((cell) => ({
+            rowIndex: cell.rowIndex,
+            columnKey: cell.columnKey
+          }))
+        ).map((row) => row.rowNumber)
+      ])
+    )
+  );
   return nextSnapshot;
 }
 

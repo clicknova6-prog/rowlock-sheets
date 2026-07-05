@@ -137,7 +137,7 @@ interface FormatButtonProps {
 
 type DemoEngineModule = typeof import("@/lib/sheet/demo-engine");
 
-const CELL_AUTOSAVE_DEBOUNCE_MS = 750;
+const CELL_AUTOSAVE_DEBOUNCE_MS = 300;
 const BULK_AUTOSAVE_DEBOUNCE_MS = 150;
 const AUTOSAVE_MAX_BATCH_SIZE = 200;
 const SOCKET_BULK_UPDATE_LIMIT = 1000;
