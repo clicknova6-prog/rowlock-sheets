@@ -1306,6 +1306,7 @@ export function SpreadsheetWorkspace({
   const redoStackRef = useRef<CellEditHistoryEntry[]>([]);
   const saveInFlightRef = useRef(false);
   const flushQueuedCellUpdatesRef = useRef<() => Promise<boolean>>(async () => true);
+  const pageExitSaveStartedRef = useRef(false);
   const activeSocketCellRef = useRef<SelectedCell | null>(null);
   const clientInstanceIdRef = useRef(createClientInstanceId());
   const socketConnectedRef = useRef(false);
@@ -1649,19 +1650,90 @@ export function SpreadsheetWorkspace({
   }, [snapshot]);
 
   useEffect(() => {
-    function warnBeforeUnload(event: BeforeUnloadEvent): void {
-      if (saveQueueRef.current.size === 0 && !saveInFlightRef.current) {
+    function hasUnsavedCellChanges(): boolean {
+      return (
+        saveQueueRef.current.size > 0 ||
+        inFlightUpdatesRef.current.size > 0 ||
+        saveInFlightRef.current
+      );
+    }
+
+    function sendPendingCellChangesOnPageExit(): void {
+      if (demoMode || pageExitSaveStartedRef.current) {
         return;
       }
 
+      const updatesByKey = new Map([
+        ...inFlightUpdatesRef.current.entries(),
+        ...saveQueueRef.current.entries()
+      ]);
+
+      if (updatesByKey.size === 0) {
+        return;
+      }
+
+      const body = JSON.stringify({
+        sheetId: latestSnapshotRef.current.sheet.id,
+        updates: [...updatesByKey.values()].slice(0, REST_BULK_UPDATE_LIMIT),
+        sourceClientId: clientInstanceIdRef.current
+      });
+      const bodyBytes = new TextEncoder().encode(body).byteLength;
+
+      if (bodyBytes > 60_000) {
+        return;
+      }
+
+      pageExitSaveStartedRef.current = true;
+
+      if (autosaveTimerRef.current) {
+        clearTimeout(autosaveTimerRef.current);
+        autosaveTimerRef.current = null;
+      }
+
+      const payload = new Blob([body], { type: "application/json" });
+
+      if (navigator.sendBeacon?.("/api/cells", payload)) {
+        return;
+      }
+
+      try {
+        void fetch("/api/cells", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body,
+          keepalive: true
+        });
+      } catch {
+        pageExitSaveStartedRef.current = false;
+      }
+    }
+
+    function warnBeforeUnload(event: BeforeUnloadEvent): void {
+      if (!hasUnsavedCellChanges()) {
+        return;
+      }
+
+      sendPendingCellChangesOnPageExit();
       event.preventDefault();
       event.returnValue = "";
     }
 
+    function handlePageHide(): void {
+      sendPendingCellChangesOnPageExit();
+    }
+
+    function handlePageShow(): void {
+      pageExitSaveStartedRef.current = false;
+    }
+
     window.addEventListener("beforeunload", warnBeforeUnload);
+    window.addEventListener("pagehide", handlePageHide);
+    window.addEventListener("pageshow", handlePageShow);
 
     return () => {
       window.removeEventListener("beforeunload", warnBeforeUnload);
+      window.removeEventListener("pagehide", handlePageHide);
+      window.removeEventListener("pageshow", handlePageShow);
       if (autosaveTimerRef.current) {
         clearTimeout(autosaveTimerRef.current);
       }
@@ -1675,7 +1747,7 @@ export function SpreadsheetWorkspace({
         clearTimeout(columnWidthSaveTimerRef.current);
       }
     };
-  }, []);
+  }, [demoMode]);
 
   useEffect(() => {
     isRangeSelectingRef.current = isRangeSelecting;
@@ -1837,6 +1909,10 @@ export function SpreadsheetWorkspace({
     setMessage(`${useSocket ? "Syncing" : "Saving"} ${updates.length} cell${updates.length === 1 ? "" : "s"}...`);
 
     if (!useSocket) {
+      for (const update of updates) {
+        inFlightUpdatesRef.current.set(getCellKey(update.rowIndex, update.columnKey), update);
+      }
+
       try {
         const response = await fetch("/api/cells", {
           method: "POST",
@@ -1855,6 +1931,10 @@ export function SpreadsheetWorkspace({
 
         if (!response.ok || (!body?.snapshot && !body?.rows)) {
           throw new Error(body?.error ?? "Unable to save queued changes.");
+        }
+
+        for (const update of updates) {
+          inFlightUpdatesRef.current.delete(getCellKey(update.rowIndex, update.columnKey));
         }
 
         saveInFlightRef.current = false;
@@ -1879,6 +1959,8 @@ export function SpreadsheetWorkspace({
       } catch (saveError) {
         for (const update of updates) {
           const key = getCellKey(update.rowIndex, update.columnKey);
+
+          inFlightUpdatesRef.current.delete(key);
 
           if (!saveQueueRef.current.has(key)) {
             saveQueueRef.current.set(key, update);

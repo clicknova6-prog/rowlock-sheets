@@ -337,7 +337,7 @@ function parseRealtimeSheet(
 ): ParsedRealtimeSheet {
   const metadata = asRecord(data.metadata);
   const sheet = {
-    id: asString(metadata.id, sheetId),
+    id: sheetId,
     name: asString(metadata.name, "Operations Tracker")
   };
   const permissionsRecord = asRecord(data.permissions);
@@ -700,17 +700,56 @@ async function readRealtimeSheet(sheetId: string, actor: Actor): Promise<ParsedR
 }
 
 export async function getDefaultRealtimeSheetId(): Promise<string | null> {
-  const sheetsSnapshot = await firebaseAdminRealtimeDb.ref("sheets").limitToFirst(1).get();
+  const sheetsSnapshot = await firebaseAdminRealtimeDb.ref("sheets").get();
 
   if (!sheetsSnapshot.exists()) {
     return null;
   }
 
   const sheets = asRecord(sheetsSnapshot.val());
-  const firstKey = Object.keys(sheets)[0];
-  const metadataId = asString(asRecord(asRecord(sheets[firstKey]).metadata).id);
+  let bestSheet: { key: string; nonEmptyCellCount: number; updatedAt: number } | null = null;
 
-  return metadataId || firstKey || null;
+  for (const [key, value] of Object.entries(sheets)) {
+    const sheet = asRecord(value);
+    const metadata = asRecord(sheet.metadata);
+    const updatedAt = Date.parse(
+      asString(metadata.updatedAt) || asString(metadata.mirroredAt)
+    );
+    let nonEmptyCellCount = 0;
+
+    for (const row of Object.values(asRecord(sheet.cells))) {
+      const columns = asRecord(row);
+
+      for (const columnKey of COLUMN_KEYS) {
+        const cell = asRecord(columns[columnKey]);
+
+        if (
+          asString(cell.value) ||
+          asNullableString(cell.formula) ||
+          asString(cell.computedValue)
+        ) {
+          nonEmptyCellCount += 1;
+        }
+      }
+    }
+
+    const candidate = {
+      key,
+      nonEmptyCellCount,
+      updatedAt: Number.isFinite(updatedAt) ? updatedAt : 0
+    };
+
+    if (
+      !bestSheet ||
+      candidate.nonEmptyCellCount > bestSheet.nonEmptyCellCount ||
+      (candidate.nonEmptyCellCount === bestSheet.nonEmptyCellCount &&
+        candidate.updatedAt > bestSheet.updatedAt)
+    ) {
+      bestSheet = candidate;
+    }
+  }
+
+  return bestSheet?.key ?? null;
 }
 
 export async function getRealtimeSheetSnapshot(
