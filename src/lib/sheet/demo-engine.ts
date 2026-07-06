@@ -213,7 +213,7 @@ export function buildRowsFromCells(
       const cell = cellLookup.get(getCellKey(rowIndex, columnKey));
       const cellFormat = formatLookup.get(getCellKey(rowIndex, columnKey));
       const formula = cell?.formula && isFormula(cell.formula) ? cell.formula : null;
-      values[columnKey] = formula ?? cell?.value ?? "";
+      values[columnKey] = formula ?? (cell?.value || cell?.computedValue || "");
       computed[columnKey] = formula
         ? cell?.computedValue ?? cell?.value ?? ""
         : cell?.computedValue || cell?.value || "";

@@ -489,6 +489,52 @@ describe("sheet row building", () => {
     expect(rows[4].__computed.C).toBe("gdhdh");
     expect(rows[4].__formula.C).toBe(false);
   });
+
+  it("uses computed text when a non-formula cell is missing its raw value", () => {
+    const rows = buildRowsFromCells(
+      {
+        currentUser: {
+          id: "admin",
+          name: "Admin",
+          email: "admin@example.com",
+          role: Role.ADMIN
+        },
+        sheet: {
+          id: "sheet-1",
+          name: "Operations Tracker"
+        },
+        columns: [...COLUMN_KEYS],
+        viewSetting: {
+          alternateRowColors: false,
+          alternateOddColor: "#ffffff",
+          alternateEvenColor: "#f8fafc",
+          fontSize: 14,
+          columnWidths: {},
+          condensedView: false,
+          frozenHeaderRowIndex: null,
+          memberEditLockAt: null
+        },
+        columnPermissions: [],
+        validationRules: [],
+        conditionalRules: [],
+        auditLogs: []
+      },
+      [
+        {
+          rowIndex: 5,
+          columnKey: "C",
+          value: "",
+          formula: null,
+          computedValue: "gdhdh"
+        }
+      ],
+      []
+    );
+
+    expect(rows[4].C).toBe("gdhdh");
+    expect(rows[4].__computed.C).toBe("gdhdh");
+    expect(rows[4].__formula.C).toBe(false);
+  });
 });
 
 describe("persisted row payloads", () => {

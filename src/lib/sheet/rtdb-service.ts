@@ -85,6 +85,16 @@ interface ParsedRealtimeSheet {
   rowMeta: Map<number, RealtimeRowMeta>;
 }
 
+interface AppliedRealtimeCellUpdates {
+  snapshot: SheetSnapshot;
+  cells: CellState[];
+}
+
+interface WriteRealtimeRowsOptions {
+  includeCells?: boolean;
+  cellStates?: CellState[];
+}
+
 function safeKey(value: string | number): string {
   return String(value).replace(FORBIDDEN_RTDB_KEY_CHARS, "_");
 }
@@ -409,7 +419,7 @@ function parseRealtimeSheet(
 
     const existingCell = cellLookup.get(cellKey);
 
-    if (getCellRawValue(existingCell).trim() || existingCell?.computedValue?.trim()) {
+    if (getCellRawValue(existingCell).trim()) {
       continue;
     }
 
@@ -421,7 +431,7 @@ function parseRealtimeSheet(
       ? asString(metadata.computedValue, value)
       : asString(metadata.computedValue) || value;
 
-    if (!formula && !value && !computedValue) {
+    if (!formula && !value && !computedValue && !existingCell?.computedValue?.trim()) {
       continue;
     }
 
@@ -528,6 +538,27 @@ function serializeCellFormat(format: CellFormatState): CellFormatState {
     textColor: format.textColor,
     backgroundColor: format.backgroundColor,
     horizontalAlign: format.horizontalAlign
+  };
+}
+
+function serializeCellUpdatedAt(value: Date | string | null | undefined): string | null {
+  if (!value) {
+    return null;
+  }
+
+  const timestamp = new Date(value).getTime();
+  return Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : String(value);
+}
+
+function serializeCellState(cell: CellState): Record<string, unknown> {
+  const formula = cell.formula && isFormula(cell.formula) ? cell.formula : null;
+  const value = formula ? "" : cell.value || cell.computedValue || "";
+
+  return {
+    value,
+    formula,
+    computedValue: formula ? cell.computedValue ?? value : cell.computedValue || value,
+    updatedAt: serializeCellUpdatedAt(cell.updatedAt)
   };
 }
 
@@ -652,9 +683,12 @@ async function writeRealtimeSnapshot(snapshot: SheetSnapshot): Promise<void> {
 
 async function writeRealtimeRows(
   snapshot: SheetSnapshot,
-  rows: SheetSnapshot["rows"]
+  rows: SheetSnapshot["rows"],
+  options: WriteRealtimeRowsOptions = {}
 ): Promise<void> {
-  if (rows.length === 0) {
+  const cellStates = options.cellStates ?? [];
+
+  if (rows.length === 0 && cellStates.length === 0) {
     return;
   }
 
@@ -668,10 +702,22 @@ async function writeRealtimeRows(
   for (const row of rows) {
     const rowKey = safeKey(row.rowNumber);
 
-    updates[`${sheetPath}/cells/${rowKey}`] = serializeRowCells(row);
+    if (options.includeCells !== false) {
+      updates[`${sheetPath}/cells/${rowKey}`] = serializeRowCells(row);
+    }
+
     updates[`${sheetPath}/rowMeta/${rowKey}`] = serializeRowMeta(row);
     updates[`${sheetPath}/ownership/${rowKey}`] = serializeRowOwnership(row);
     updates[`${sheetPath}/formats/${rowKey}`] = serializeRowFormats(row);
+  }
+
+  for (const cell of cellStates) {
+    if (!isValidRowIndex(cell.rowIndex) || !COLUMN_KEYS.includes(cell.columnKey)) {
+      continue;
+    }
+
+    updates[`${sheetPath}/cells/${safeKey(cell.rowIndex)}/${cell.columnKey}`] =
+      serializeCellState(cell);
   }
 
   await firebaseAdminRealtimeDb.ref().update(cleanForRealtimeDatabase(updates));
@@ -683,6 +729,14 @@ function selectRowsByIndexes(
 ): SheetSnapshot["rows"] {
   const wantedRows = new Set(rowIndexes);
   return snapshot.rows.filter((row) => wantedRows.has(row.rowNumber));
+}
+
+function selectCellsByRows(
+  cells: CellState[],
+  rows: SheetSnapshot["rows"]
+): CellState[] {
+  const wantedRows = new Set(rows.map((row) => row.rowNumber));
+  return cells.filter((cell) => wantedRows.has(cell.rowIndex));
 }
 
 function appendAuditLogs(snapshot: SheetSnapshot, logs: Omit<AuditLogState, "id" | "createdAt">[]): AuditLogState[] {
@@ -820,11 +874,11 @@ function applyCellUpdates(
   parsed: ParsedRealtimeSheet,
   actor: Actor,
   updates: Array<{ rowIndex: number; columnKey: ColumnKey; value: string }>
-): SheetSnapshot {
+): AppliedRealtimeCellUpdates {
   const { snapshot, cells, ownerships, formats, rowMeta } = parsed;
 
   if (updates.length === 0) {
-    return snapshot;
+    return { snapshot, cells };
   }
 
   const ownershipLookup = new Map(ownerships.map((ownership) => [ownership.rowIndex, ownership]));
@@ -1001,14 +1055,17 @@ function applyCellUpdates(
     metadata: null
   }));
 
-  return buildSnapshotFromParts({
-    snapshot,
-    cells: nextCells,
-    ownerships: nextOwnerships,
-    formats,
-    rowMeta,
-    auditLogs: appendAuditLogs(snapshot, [...rowClaimLogs, ...cellAuditLogs])
-  });
+  return {
+    snapshot: buildSnapshotFromParts({
+      snapshot,
+      cells: nextCells,
+      ownerships: nextOwnerships,
+      formats,
+      rowMeta,
+      auditLogs: appendAuditLogs(snapshot, [...rowClaimLogs, ...cellAuditLogs])
+    }),
+    cells: nextCells
+  };
 }
 
 export async function claimRealtimeRowForEdit(
@@ -1040,10 +1097,14 @@ export async function updateRealtimeCell(
       value: input.value
     }
   ];
-  const nextSnapshot = applyCellUpdates(await readRealtimeSheet(input.sheetId, actor), actor, updates);
+  const result = applyCellUpdates(await readRealtimeSheet(input.sheetId, actor), actor, updates);
+  const rows = getRowsForPersistedCellUpdates(result.snapshot, updates);
 
-  await writeRealtimeRows(nextSnapshot, getRowsForPersistedCellUpdates(nextSnapshot, updates));
-  return nextSnapshot;
+  await writeRealtimeRows(result.snapshot, rows, {
+    includeCells: false,
+    cellStates: selectCellsByRows(result.cells, rows)
+  });
+  return result.snapshot;
 }
 
 export async function bulkUpdateRealtimeCells(
@@ -1055,10 +1116,14 @@ export async function bulkUpdateRealtimeCells(
     columnKey: assertColumnKey(update.columnKey),
     value: update.value
   }));
-  const nextSnapshot = applyCellUpdates(await readRealtimeSheet(input.sheetId, actor), actor, updates);
+  const result = applyCellUpdates(await readRealtimeSheet(input.sheetId, actor), actor, updates);
+  const rows = getRowsForPersistedCellUpdates(result.snapshot, updates);
 
-  await writeRealtimeRows(nextSnapshot, getRowsForPersistedCellUpdates(nextSnapshot, updates));
-  return nextSnapshot;
+  await writeRealtimeRows(result.snapshot, rows, {
+    includeCells: false,
+    cellStates: selectCellsByRows(result.cells, rows)
+  });
+  return result.snapshot;
 }
 
 export async function updateRealtimeCellFormats(
