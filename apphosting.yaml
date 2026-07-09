@@ -1,5 +1,5 @@
 # Firebase App Hosting runs this Next.js custom server through `npm run start`.
-# Keep maxInstances conservative while RTDB source mode is being validated.
+# Keep maxInstances conservative while Cloud SQL is the source of truth.
 runConfig:
   cpu: 1
   memoryMiB: 1024
@@ -18,7 +18,7 @@ env:
       - BUILD
       - RUNTIME
   - variable: SHEET_DATA_SOURCE
-    value: "rtdb"
+    value: "sql"
     availability:
       - BUILD
       - RUNTIME
