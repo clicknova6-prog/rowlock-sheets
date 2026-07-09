@@ -751,12 +751,23 @@ function selectRowsByIndexes(
   return snapshot.rows.filter((row) => wantedRows.has(row.rowNumber));
 }
 
-function selectCellsByRows(
+function selectCellsForPersistedUpdates(
   cells: CellState[],
-  rows: SheetSnapshot["rows"]
+  rows: SheetSnapshot["rows"],
+  updates: Array<{ rowIndex: number; columnKey: ColumnKey }>
 ): CellState[] {
-  const wantedRows = new Set(rows.map((row) => row.rowNumber));
-  return cells.filter((cell) => wantedRows.has(cell.rowIndex));
+  const editedCells = new Set(
+    updates.map((update) => getCellKey(update.rowIndex, update.columnKey))
+  );
+  const returnedRows = new Set(rows.map((row) => row.rowNumber));
+
+  return cells.filter((cell) => {
+    if (editedCells.has(getCellKey(cell.rowIndex, cell.columnKey))) {
+      return true;
+    }
+
+    return returnedRows.has(cell.rowIndex) && Boolean(cell.formula && isFormula(cell.formula));
+  });
 }
 
 function createAuditLogs(logs: Omit<AuditLogState, "id" | "createdAt">[]): AuditLogState[] {
@@ -1131,7 +1142,7 @@ export async function updateRealtimeCell(
 
   await writeRealtimeRows(result.snapshot, rows, {
     includeCells: false,
-    cellStates: selectCellsByRows(result.cells, rows),
+    cellStates: selectCellsForPersistedUpdates(result.cells, rows, updates),
     cellHistoryLogs: result.cellHistoryLogs
   });
   return result.snapshot;
@@ -1151,7 +1162,7 @@ export async function bulkUpdateRealtimeCells(
 
   await writeRealtimeRows(result.snapshot, rows, {
     includeCells: false,
-    cellStates: selectCellsByRows(result.cells, rows),
+    cellStates: selectCellsForPersistedUpdates(result.cells, rows, updates),
     cellHistoryLogs: result.cellHistoryLogs
   });
   return result.snapshot;
@@ -1548,17 +1559,19 @@ export async function getRealtimeCellHistory(
     throw new SheetRuleError("Rows must be between 1 and 1000.");
   }
 
-  const historySnapshot = await firebaseAdminRealtimeDb
-    .ref(
-      `sheets/${safeKey(input.sheetId)}/cellHistory/${safeKey(input.rowIndex)}/${columnKey}`
-    )
-    .orderByChild("createdAt")
-    .limitToLast(CELL_HISTORY_LIMIT)
-    .get();
+  let cellHistoryLogs: AuditLogState[] = [];
 
-  const cellHistoryLogs = historySnapshot.exists()
-    ? parseAuditLogs(historySnapshot.val(), CELL_HISTORY_LIMIT)
-    : [];
+  try {
+    const historySnapshot = await firebaseAdminRealtimeDb
+      .ref(`sheets/${safeKey(input.sheetId)}/cellHistory/${safeKey(input.rowIndex)}/${columnKey}`)
+      .get();
+
+    cellHistoryLogs = historySnapshot.exists()
+      ? parseAuditLogs(historySnapshot.val(), CELL_HISTORY_LIMIT)
+      : [];
+  } catch (error) {
+    console.warn("Unable to read realtime cell history path.", error);
+  }
 
   if (cellHistoryLogs.length > 0) {
     return cellHistoryLogs.map((log) => ({

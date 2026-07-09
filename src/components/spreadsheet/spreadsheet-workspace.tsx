@@ -139,7 +139,7 @@ type DemoEngineModule = typeof import("@/lib/sheet/demo-engine");
 
 const CELL_AUTOSAVE_DEBOUNCE_MS = 300;
 const BULK_AUTOSAVE_DEBOUNCE_MS = 150;
-const AUTOSAVE_MAX_BATCH_SIZE = 10000;
+const AUTOSAVE_MAX_BATCH_SIZE = 200;
 const SOCKET_BULK_UPDATE_LIMIT = 1000;
 const REST_BULK_UPDATE_LIMIT = 10000;
 const LIVE_SYNC_ACK_TIMEOUT_MS = 300000;
@@ -3621,6 +3621,7 @@ export function SpreadsheetWorkspace({
           `Pasted ${updates.length} cell${updates.length === 1 ? "" : "s"}.`,
           BULK_AUTOSAVE_DEBOUNCE_MS
         );
+        void flushQueuedCellUpdates();
         return;
       }
     }
@@ -3638,7 +3639,7 @@ export function SpreadsheetWorkspace({
     } else {
       setError(null);
     }
-  }, [demoMode, locks, queueCellUpdates, recordCellEditHistory, rows, snapshot]);
+  }, [demoMode, flushQueuedCellUpdates, locks, queueCellUpdates, recordCellEditHistory, rows, snapshot]);
 
   useEffect(() => {
     function handleSpreadsheetShortcut(event: KeyboardEvent): void {
