@@ -71,6 +71,7 @@ interface RealtimeSheetData {
   validationRules?: unknown;
   conditionalRules?: unknown;
   audit?: unknown;
+  cellHistory?: unknown;
 }
 
 interface RealtimeRowMeta {
@@ -344,6 +345,92 @@ function parseAuditLogs(value: unknown, limit = 30): AuditLogState[] {
     .slice(0, limit);
 }
 
+function getLogTimestamp(log: AuditLogState): number {
+  const timestamp = Date.parse(log.createdAt);
+  return Number.isFinite(timestamp) ? timestamp : 0;
+}
+
+function getCellTimestamp(cell: CellState | undefined): number {
+  if (!cell?.updatedAt) {
+    return 0;
+  }
+
+  const timestamp = new Date(cell.updatedAt).getTime();
+  return Number.isFinite(timestamp) ? timestamp : 0;
+}
+
+function recoverCellFromAuditLog(
+  cellLookup: Map<string, CellState>,
+  log: AuditLogState
+): void {
+  if (
+    log.action !== AuditAction.CELL_UPDATED ||
+    !isValidRowIndex(log.rowIndex ?? 0) ||
+    !COLUMN_KEYS.includes(log.columnKey as ColumnKey)
+  ) {
+    return;
+  }
+
+  const rowIndex = log.rowIndex as number;
+  const columnKey = log.columnKey as ColumnKey;
+  const cellKey = getCellKey(rowIndex, columnKey);
+  const existingCell = cellLookup.get(cellKey);
+
+  if (getCellRawValue(existingCell).trim()) {
+    return;
+  }
+
+  if (getCellTimestamp(existingCell) > getLogTimestamp(log)) {
+    return;
+  }
+
+  const metadata = asRecord(log.metadata);
+  const rawFormula = asNullableString(metadata.formula);
+  const formula = rawFormula && isFormula(rawFormula) ? rawFormula : null;
+  const value = formula ? "" : asString(metadata.value);
+  const computedValue = formula
+    ? asString(metadata.computedValue, value)
+    : asString(metadata.computedValue) || value;
+
+  if (!formula && !value && !computedValue && !existingCell?.computedValue?.trim()) {
+    return;
+  }
+
+  cellLookup.set(cellKey, {
+    rowIndex,
+    columnKey,
+    value,
+    formula,
+    computedValue,
+    updatedAt: log.createdAt
+  });
+}
+
+function recoverCellsFromCellHistory(
+  cellLookup: Map<string, CellState>,
+  cellHistory: unknown
+): void {
+  for (const [rawRowIndex, columns] of Object.entries(asRecord(cellHistory))) {
+    const rowIndex = Number.parseInt(rawRowIndex, 10);
+
+    if (!isValidRowIndex(rowIndex)) {
+      continue;
+    }
+
+    for (const [rawColumnKey, logs] of Object.entries(asRecord(columns))) {
+      if (!COLUMN_KEYS.includes(rawColumnKey as ColumnKey)) {
+        continue;
+      }
+
+      const [latestLog] = parseAuditLogs(logs, 1);
+
+      if (latestLog) {
+        recoverCellFromAuditLog(cellLookup, latestLog);
+      }
+    }
+  }
+}
+
 function parseRealtimeSheet(
   sheetId: string,
   currentUser: Actor,
@@ -410,43 +497,18 @@ function parseRealtimeSheet(
       continue;
     }
 
-    const rowIndex = log.rowIndex as number;
-    const columnKey = log.columnKey as ColumnKey;
-    const cellKey = getCellKey(rowIndex, columnKey);
+    const cellKey = getCellKey(log.rowIndex as number, log.columnKey as ColumnKey);
 
     if (seenAuditCells.has(cellKey)) {
       continue;
     }
 
     seenAuditCells.add(cellKey);
-
-    const existingCell = cellLookup.get(cellKey);
-
-    if (getCellRawValue(existingCell).trim()) {
-      continue;
-    }
-
-    const metadata = asRecord(log.metadata);
-    const rawFormula = asNullableString(metadata.formula);
-    const formula = rawFormula && isFormula(rawFormula) ? rawFormula : null;
-    const value = formula ? "" : asString(metadata.value);
-    const computedValue = formula
-      ? asString(metadata.computedValue, value)
-      : asString(metadata.computedValue) || value;
-
-    if (!formula && !value && !computedValue && !existingCell?.computedValue?.trim()) {
-      continue;
-    }
-
-    cellLookup.set(cellKey, {
-      rowIndex,
-      columnKey,
-      value,
-      formula,
-      computedValue,
-      updatedAt: log.createdAt
-    });
+    recoverCellFromAuditLog(cellLookup, log);
   }
+
+  recoverCellsFromCellHistory(cellLookup, data.cellHistory);
+
   const parsedCells = [...cellLookup.values()];
 
   const ownerships: RowOwnershipState[] = Object.entries(asRecord(data.ownership))
