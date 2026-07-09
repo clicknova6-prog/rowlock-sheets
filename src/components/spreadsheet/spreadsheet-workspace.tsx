@@ -2645,7 +2645,11 @@ export function SpreadsheetWorkspace({
     }
 
     recordCellEditHistory(previousRows, updates);
-    queueCellUpdates(updates, `${savedLabel} changed.`);
+    queueCellUpdates(
+      updates,
+      `${savedLabel} changed.`,
+      updates.length === 1 ? BULK_AUTOSAVE_DEBOUNCE_MS : CELL_AUTOSAVE_DEBOUNCE_MS
+    );
   }
 
   function handleRowsChange(
