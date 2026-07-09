@@ -361,7 +361,8 @@ function getCellTimestamp(cell: CellState | undefined): number {
 
 function recoverCellFromAuditLog(
   cellLookup: Map<string, CellState>,
-  log: AuditLogState
+  log: AuditLogState,
+  options: { respectExistingTimestamp?: boolean } = {}
 ): void {
   if (
     log.action !== AuditAction.CELL_UPDATED ||
@@ -380,7 +381,10 @@ function recoverCellFromAuditLog(
     return;
   }
 
-  if (getCellTimestamp(existingCell) > getLogTimestamp(log)) {
+  if (
+    options.respectExistingTimestamp !== false &&
+    getCellTimestamp(existingCell) > getLogTimestamp(log)
+  ) {
     return;
   }
 
@@ -425,7 +429,7 @@ function recoverCellsFromCellHistory(
       const [latestLog] = parseAuditLogs(logs, 1);
 
       if (latestLog) {
-        recoverCellFromAuditLog(cellLookup, latestLog);
+        recoverCellFromAuditLog(cellLookup, latestLog, { respectExistingTimestamp: false });
       }
     }
   }
@@ -1551,6 +1555,31 @@ export async function resetRealtimeRows(
       updatedAt: now
     }))
   );
+  const previousCellLookup = new Map(
+    parsed.cells.map((cell) => [getCellKey(cell.rowIndex, cell.columnKey), cell])
+  );
+  const resetCellHistoryLogs = createAuditLogs(
+    resetCells.map((cell) => {
+      const previousCell = previousCellLookup.get(getCellKey(cell.rowIndex, cell.columnKey));
+
+      return {
+        action: AuditAction.CELL_UPDATED,
+        actorName: actor.name,
+        rowIndex: cell.rowIndex,
+        columnKey: cell.columnKey,
+        message: `${actor.name} reset ${cell.columnKey}${cell.rowIndex}.`,
+        metadata: {
+          previousValue: getCellRawValue(previousCell),
+          value: "",
+          previousComputedValue: previousCell?.computedValue ?? previousCell?.value ?? "",
+          computedValue: "",
+          previousFormula: previousCell?.formula ?? null,
+          formula: null,
+          reset: true
+        }
+      };
+    })
+  );
   const nextCellsWithoutComputed = upsertEditedCells(parsed.cells, resetCells);
   const nextCells = mergeRecalculatedCells(
     nextCellsWithoutComputed,
@@ -1602,7 +1631,10 @@ export async function resetRealtimeRows(
           }))
         ).map((row) => row.rowNumber)
       ])
-    )
+    ),
+    {
+      cellHistoryLogs: resetCellHistoryLogs
+    }
   );
   return nextSnapshot;
 }
