@@ -56,6 +56,7 @@ import type {
 const RTDB_SCHEMA_VERSION = 1;
 const FORBIDDEN_RTDB_KEY_CHARS = /[.#$/[\]]/g;
 const DETAILED_BULK_AUDIT_LIMIT = 100;
+const CELL_HISTORY_LIMIT = 100;
 
 interface RealtimeSheetData {
   schemaVersion?: unknown;
@@ -88,11 +89,13 @@ interface ParsedRealtimeSheet {
 interface AppliedRealtimeCellUpdates {
   snapshot: SheetSnapshot;
   cells: CellState[];
+  cellHistoryLogs: AuditLogState[];
 }
 
 interface WriteRealtimeRowsOptions {
   includeCells?: boolean;
   cellStates?: CellState[];
+  cellHistoryLogs?: AuditLogState[];
 }
 
 function safeKey(value: string | number): string {
@@ -316,7 +319,7 @@ function normalizeConditionalRule(id: string, value: unknown): ConditionalRuleSt
   };
 }
 
-function parseAuditLogs(value: unknown): AuditLogState[] {
+function parseAuditLogs(value: unknown, limit = 30): AuditLogState[] {
   return Object.entries(asRecord(value))
     .map(([id, auditValue]) => {
       const record = asRecord(auditValue);
@@ -338,7 +341,7 @@ function parseAuditLogs(value: unknown): AuditLogState[] {
     })
     .filter((log) => log.action && log.message)
     .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
-    .slice(0, 30);
+    .slice(0, limit);
 }
 
 function parseRealtimeSheet(
@@ -612,20 +615,21 @@ function serializeRowOwnership(row: SheetSnapshot["rows"][number]): Record<strin
     : null;
 }
 
+function serializeAuditLog(log: AuditLogState): Omit<AuditLogState, "id"> {
+  return {
+    action: log.action,
+    actorName: log.actorName,
+    rowIndex: log.rowIndex,
+    columnKey: log.columnKey,
+    message: log.message,
+    metadata: log.metadata ?? null,
+    createdAt: log.createdAt
+  };
+}
+
 function serializeAuditLogs(auditLogs: AuditLogState[]): Record<string, Omit<AuditLogState, "id">> {
   return Object.fromEntries(
-    auditLogs.slice(0, 30).map((log) => [
-      safeKey(log.id),
-      {
-        action: log.action,
-        actorName: log.actorName,
-        rowIndex: log.rowIndex,
-        columnKey: log.columnKey,
-        message: log.message,
-        metadata: log.metadata ?? null,
-        createdAt: log.createdAt
-      }
-    ])
+    auditLogs.slice(0, 30).map((log) => [safeKey(log.id), serializeAuditLog(log)])
   );
 }
 
@@ -687,8 +691,9 @@ async function writeRealtimeRows(
   options: WriteRealtimeRowsOptions = {}
 ): Promise<void> {
   const cellStates = options.cellStates ?? [];
+  const cellHistoryLogs = options.cellHistoryLogs ?? [];
 
-  if (rows.length === 0 && cellStates.length === 0) {
+  if (rows.length === 0 && cellStates.length === 0 && cellHistoryLogs.length === 0) {
     return;
   }
 
@@ -720,6 +725,21 @@ async function writeRealtimeRows(
       serializeCellState(cell);
   }
 
+  for (const log of cellHistoryLogs) {
+    if (
+      log.rowIndex === null ||
+      log.columnKey === null ||
+      !isValidRowIndex(log.rowIndex) ||
+      !COLUMN_KEYS.includes(log.columnKey as ColumnKey)
+    ) {
+      continue;
+    }
+
+    updates[
+      `${sheetPath}/cellHistory/${safeKey(log.rowIndex)}/${log.columnKey}/${safeKey(log.id)}`
+    ] = serializeAuditLog(log);
+  }
+
   await firebaseAdminRealtimeDb.ref().update(cleanForRealtimeDatabase(updates));
 }
 
@@ -739,17 +759,18 @@ function selectCellsByRows(
   return cells.filter((cell) => wantedRows.has(cell.rowIndex));
 }
 
-function appendAuditLogs(snapshot: SheetSnapshot, logs: Omit<AuditLogState, "id" | "createdAt">[]): AuditLogState[] {
+function createAuditLogs(logs: Omit<AuditLogState, "id" | "createdAt">[]): AuditLogState[] {
   const createdAt = nowIso();
 
-  return [
-    ...logs.map((log) => ({
-      id: createId("audit"),
-      createdAt,
-      ...log
-    })),
-    ...snapshot.auditLogs
-  ].slice(0, 30);
+  return logs.map((log) => ({
+    id: createId("audit"),
+    createdAt,
+    ...log
+  }));
+}
+
+function appendAuditLogs(snapshot: SheetSnapshot, logs: Omit<AuditLogState, "id" | "createdAt">[]): AuditLogState[] {
+  return [...createAuditLogs(logs), ...snapshot.auditLogs].slice(0, 30);
 }
 
 function buildSnapshotFromParts(input: {
@@ -878,7 +899,7 @@ function applyCellUpdates(
   const { snapshot, cells, ownerships, formats, rowMeta } = parsed;
 
   if (updates.length === 0) {
-    return { snapshot, cells };
+    return { snapshot, cells, cellHistoryLogs: [] };
   }
 
   const ownershipLookup = new Map(ownerships.map((ownership) => [ownership.rowIndex, ownership]));
@@ -1011,28 +1032,30 @@ function applyCellUpdates(
   const computedLookup = new Map(
     nextCells.map((cell) => [getCellKey(cell.rowIndex, cell.columnKey), cell.computedValue ?? ""])
   );
-  const cellAuditLogs =
+  const detailedCellAuditInputs = editedCells.map((cell) => {
+    const previousCell = previousCellLookup.get(getCellKey(cell.rowIndex, cell.columnKey));
+    return {
+      action: AuditAction.CELL_UPDATED,
+      actorName: actor.name,
+      rowIndex: cell.rowIndex,
+      columnKey: cell.columnKey,
+      message: `${actor.name} updated ${cell.columnKey}${cell.rowIndex}.`,
+      metadata: {
+        previousValue: getCellRawValue(previousCell),
+        value: cell.formula ?? cell.value,
+        previousComputedValue: previousCell?.computedValue ?? previousCell?.value ?? "",
+        computedValue: computedLookup.get(getCellKey(cell.rowIndex, cell.columnKey)) ?? "",
+        previousFormula: previousCell?.formula ?? null,
+        formula: cell.formula ?? null,
+        bulk: editedCells.length > 1
+      }
+    };
+  });
+  const cellHistoryLogs = createAuditLogs(detailedCellAuditInputs);
+  const globalCellAuditLogs =
     editedCells.length <= DETAILED_BULK_AUDIT_LIMIT
-      ? editedCells.map((cell) => {
-          const previousCell = previousCellLookup.get(getCellKey(cell.rowIndex, cell.columnKey));
-          return {
-            action: AuditAction.CELL_UPDATED,
-            actorName: actor.name,
-            rowIndex: cell.rowIndex,
-            columnKey: cell.columnKey,
-            message: `${actor.name} updated ${cell.columnKey}${cell.rowIndex}.`,
-            metadata: {
-              previousValue: getCellRawValue(previousCell),
-              value: cell.formula ?? cell.value,
-              previousComputedValue: previousCell?.computedValue ?? previousCell?.value ?? "",
-              computedValue: computedLookup.get(getCellKey(cell.rowIndex, cell.columnKey)) ?? "",
-              previousFormula: previousCell?.formula ?? null,
-              formula: cell.formula ?? null,
-              bulk: editedCells.length > 1
-            }
-          };
-        })
-      : [
+      ? cellHistoryLogs
+      : createAuditLogs([
           {
             action: AuditAction.CELL_UPDATED,
             actorName: actor.name,
@@ -1045,7 +1068,7 @@ function applyCellUpdates(
               truncated: editedCells.length > 500
             }
           }
-        ];
+        ]);
   const rowClaimLogs = rowsToClaim.map((rowIndex) => ({
     action: AuditAction.ROW_CLAIMED,
     actorName: actor.name,
@@ -1054,6 +1077,11 @@ function applyCellUpdates(
     message: `${actor.name} claimed row ${rowIndex}.`,
     metadata: null
   }));
+  const globalAuditLogs = [
+    ...createAuditLogs(rowClaimLogs),
+    ...globalCellAuditLogs,
+    ...snapshot.auditLogs
+  ].slice(0, 30);
 
   return {
     snapshot: buildSnapshotFromParts({
@@ -1062,9 +1090,10 @@ function applyCellUpdates(
       ownerships: nextOwnerships,
       formats,
       rowMeta,
-      auditLogs: appendAuditLogs(snapshot, [...rowClaimLogs, ...cellAuditLogs])
+      auditLogs: globalAuditLogs
     }),
-    cells: nextCells
+    cells: nextCells,
+    cellHistoryLogs
   };
 }
 
@@ -1102,7 +1131,8 @@ export async function updateRealtimeCell(
 
   await writeRealtimeRows(result.snapshot, rows, {
     includeCells: false,
-    cellStates: selectCellsByRows(result.cells, rows)
+    cellStates: selectCellsByRows(result.cells, rows),
+    cellHistoryLogs: result.cellHistoryLogs
   });
   return result.snapshot;
 }
@@ -1121,7 +1151,8 @@ export async function bulkUpdateRealtimeCells(
 
   await writeRealtimeRows(result.snapshot, rows, {
     includeCells: false,
-    cellStates: selectCellsByRows(result.cells, rows)
+    cellStates: selectCellsByRows(result.cells, rows),
+    cellHistoryLogs: result.cellHistoryLogs
   });
   return result.snapshot;
 }
@@ -1515,6 +1546,34 @@ export async function getRealtimeCellHistory(
 
   if (!isValidRowIndex(input.rowIndex)) {
     throw new SheetRuleError("Rows must be between 1 and 1000.");
+  }
+
+  const historySnapshot = await firebaseAdminRealtimeDb
+    .ref(
+      `sheets/${safeKey(input.sheetId)}/cellHistory/${safeKey(input.rowIndex)}/${columnKey}`
+    )
+    .orderByChild("createdAt")
+    .limitToLast(CELL_HISTORY_LIMIT)
+    .get();
+
+  const cellHistoryLogs = historySnapshot.exists()
+    ? parseAuditLogs(historySnapshot.val(), CELL_HISTORY_LIMIT)
+    : [];
+
+  if (cellHistoryLogs.length > 0) {
+    return cellHistoryLogs.map((log) => ({
+      id: log.id,
+      action: log.action,
+      actorName: log.actorName,
+      message: log.message,
+      previousValue: getMetadataString(log.metadata, "previousValue"),
+      value: getMetadataString(log.metadata, "value"),
+      previousComputedValue: getMetadataString(log.metadata, "previousComputedValue"),
+      computedValue: getMetadataString(log.metadata, "computedValue"),
+      previousFormula: getMetadataString(log.metadata, "previousFormula"),
+      formula: getMetadataString(log.metadata, "formula"),
+      createdAt: log.createdAt
+    }));
   }
 
   const snapshot = await getRealtimeSheetSnapshot(input.sheetId, actor);
