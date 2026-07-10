@@ -14,6 +14,7 @@ import {
   normalizeHexColor,
   normalizeSheetColumnWidths,
   normalizeSheetCondensedView,
+  normalizeSheetFrozenHeaderColumnKey,
   normalizeSheetFrozenHeaderRowIndex,
   normalizeSheetFontSize
 } from "./formatting";
@@ -101,6 +102,7 @@ export interface UpdateSheetViewSettingsInput {
   columnWidths?: Record<string, number>;
   condensedView?: boolean;
   frozenHeaderRowIndex?: number | null;
+  frozenHeaderColumnKey?: ColumnKey | string | null;
   memberEditLockAt?: Date | string | null;
 }
 
@@ -1257,6 +1259,10 @@ export async function updateSheetViewSettings(
     input.frozenHeaderRowIndex === undefined
       ? undefined
       : normalizeSheetFrozenHeaderRowIndex(input.frozenHeaderRowIndex);
+  const frozenHeaderColumnKey =
+    input.frozenHeaderColumnKey === undefined
+      ? undefined
+      : normalizeSheetFrozenHeaderColumnKey(input.frozenHeaderColumnKey);
   const memberEditLockAt =
     input.memberEditLockAt === undefined
       ? undefined
@@ -1290,6 +1296,7 @@ export async function updateSheetViewSettings(
     ...(columnWidths === undefined ? {} : { columnWidths }),
     ...(condensedView === undefined ? {} : { condensedView }),
     ...(frozenHeaderRowIndex === undefined ? {} : { frozenHeaderRowIndex }),
+    ...(frozenHeaderColumnKey === undefined ? {} : { frozenHeaderColumnKey }),
     ...(memberEditLockAt === undefined ? {} : { memberEditLockAt })
   };
 
@@ -1306,6 +1313,8 @@ export async function updateSheetViewSettings(
       condensedView: condensedView ?? DEFAULT_SHEET_VIEW_SETTING.condensedView,
       frozenHeaderRowIndex:
         frozenHeaderRowIndex ?? DEFAULT_SHEET_VIEW_SETTING.frozenHeaderRowIndex,
+      frozenHeaderColumnKey:
+        frozenHeaderColumnKey ?? DEFAULT_SHEET_VIEW_SETTING.frozenHeaderColumnKey,
       memberEditLockAt:
         memberEditLockAt ?? DEFAULT_SHEET_VIEW_SETTING.memberEditLockAt
     },
@@ -1318,6 +1327,7 @@ export async function updateSheetViewSettings(
       columnWidths: true,
       condensedView: true,
       frozenHeaderRowIndex: true,
+      frozenHeaderColumnKey: true,
       memberEditLockAt: true
     }
   });
@@ -1335,6 +1345,9 @@ export async function updateSheetViewSettings(
     condensedView: normalizeSheetCondensedView(viewSetting.condensedView),
     frozenHeaderRowIndex: normalizeSheetFrozenHeaderRowIndex(
       viewSetting.frozenHeaderRowIndex
+    ),
+    frozenHeaderColumnKey: normalizeSheetFrozenHeaderColumnKey(
+      viewSetting.frozenHeaderColumnKey
     ),
     memberEditLockAt: viewSetting.memberEditLockAt?.toISOString() ?? null
   };

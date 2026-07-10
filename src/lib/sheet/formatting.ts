@@ -29,6 +29,7 @@ export const DEFAULT_SHEET_VIEW_SETTING: SheetViewSettingState = {
   columnWidths: {},
   condensedView: false,
   frozenHeaderRowIndex: null,
+  frozenHeaderColumnKey: null,
   memberEditLockAt: null
 };
 
@@ -114,6 +115,16 @@ export function normalizeSheetFrozenHeaderRowIndex(value: unknown): number | nul
   }
 
   return rowIndex;
+}
+
+export function normalizeSheetFrozenHeaderColumnKey(value: unknown): ColumnKey | null {
+  if (value === null || value === undefined || value === "") {
+    return null;
+  }
+
+  const columnKey = String(value).trim().toUpperCase();
+
+  return COLUMN_KEYS.includes(columnKey as ColumnKey) ? (columnKey as ColumnKey) : null;
 }
 
 export function normalizeHorizontalAlign(value: unknown): HorizontalAlign | null {

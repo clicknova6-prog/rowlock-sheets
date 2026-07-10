@@ -149,6 +149,7 @@ model SheetViewSetting {
   columnWidths       Json?
   condensedView      Boolean   @default(false)
   frozenHeaderRowIndex Int?
+  frozenHeaderColumnKey String? @db.VarChar(1)
   memberEditLockAt   DateTime?
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt

@@ -13,6 +13,7 @@ import {
   AlertCircle,
   Bold,
   CheckCircle2,
+  Columns3,
   Copy,
   Eraser,
   History,
@@ -1274,6 +1275,7 @@ export function SpreadsheetWorkspace({
   const [historyPanel, setHistoryPanel] = useState<CellHistoryPanelState | null>(null);
   const [columnCheckDialog, setColumnCheckDialog] =
     useState<ColumnCheckDialogState | null>(null);
+  const [memberRuleViolation, setMemberRuleViolation] = useState<string | null>(null);
   const [locks, setLocks] = useState<Map<string, CellLockState>>(new Map());
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -1415,7 +1417,7 @@ export function SpreadsheetWorkspace({
     patch: Partial<
       Pick<
         SheetViewSettingState,
-        "columnWidths" | "condensedView" | "frozenHeaderRowIndex"
+        "columnWidths" | "condensedView" | "frozenHeaderRowIndex" | "frozenHeaderColumnKey"
       >
     >,
     successMessage: string
@@ -1466,7 +1468,9 @@ export function SpreadsheetWorkspace({
     await persistViewSettings({ columnWidths: nextColumnWidths }, "Column widths saved.");
   }, [persistViewSettings]);
   const updateViewSetting = useCallback(async (
-    patch: Partial<Pick<SheetViewSettingState, "condensedView" | "frozenHeaderRowIndex">>,
+    patch: Partial<
+      Pick<SheetViewSettingState, "condensedView" | "frozenHeaderRowIndex" | "frozenHeaderColumnKey">
+    >,
     successMessage: string
   ): Promise<void> => {
     const currentSnapshot = latestSnapshotRef.current;
@@ -1516,6 +1520,24 @@ export function SpreadsheetWorkspace({
         : "Header row cleared"
     );
   }, [selectedAdminRowIndex, updateViewSetting]);
+  const toggleSelectedColumnHeader = useCallback(async (): Promise<void> => {
+    if (!selectedAdminColumnKey) {
+      setError(null);
+      setMessage("Select a column first.");
+      return;
+    }
+
+    const currentHeaderColumnKey = latestSnapshotRef.current.viewSetting.frozenHeaderColumnKey;
+    const nextHeaderColumnKey =
+      currentHeaderColumnKey === selectedAdminColumnKey ? null : selectedAdminColumnKey;
+
+    await updateViewSetting(
+      { frozenHeaderColumnKey: nextHeaderColumnKey },
+      nextHeaderColumnKey
+        ? `Column ${nextHeaderColumnKey} set as header column`
+        : "Header column cleared"
+    );
+  }, [selectedAdminColumnKey, updateViewSetting]);
   const handleColumnWidthsChange = useCallback((nextColumnWidths: ColumnWidths): void => {
     setColumnWidths(nextColumnWidths);
 
@@ -1837,6 +1859,8 @@ export function SpreadsheetWorkspace({
     setMessage(`${useSocket ? "Syncing" : "Saving"} ${updates.length} cell${updates.length === 1 ? "" : "s"}...`);
 
     if (!useSocket) {
+      let forceMemberRefresh = false;
+
       try {
         const response = await fetch("/api/cells", {
           method: "POST",
@@ -1854,7 +1878,18 @@ export function SpreadsheetWorkspace({
         } | null;
 
         if (!response.ok || (!body?.snapshot && !body?.rows)) {
-          throw new Error(body?.error ?? "Unable to save queued changes.");
+          const errorMessage = body?.error ?? "Unable to save queued changes.";
+
+          forceMemberRefresh =
+            latestSnapshotRef.current.currentUser.role === Role.MEMBER &&
+            response.status >= 400 &&
+            response.status < 500;
+
+          if (forceMemberRefresh) {
+            setMemberRuleViolation(errorMessage);
+          }
+
+          throw new Error(errorMessage);
         }
 
         saveInFlightRef.current = false;
@@ -1877,11 +1912,19 @@ export function SpreadsheetWorkspace({
 
         return true;
       } catch (saveError) {
-        for (const update of updates) {
-          const key = getCellKey(update.rowIndex, update.columnKey);
+        if (forceMemberRefresh) {
+          clearAutosaveTimer();
+          saveQueueRef.current.clear();
+          inFlightUpdatesRef.current.clear();
+          setRows(latestSnapshotRef.current.rows);
+          rowsRef.current = latestSnapshotRef.current.rows;
+        } else {
+          for (const update of updates) {
+            const key = getCellKey(update.rowIndex, update.columnKey);
 
-          if (!saveQueueRef.current.has(key)) {
-            saveQueueRef.current.set(key, update);
+            if (!saveQueueRef.current.has(key)) {
+              saveQueueRef.current.set(key, update);
+            }
           }
         }
 
@@ -1889,8 +1932,18 @@ export function SpreadsheetWorkspace({
         setIsSavingCells(false);
         setPendingSaveCount(saveQueueRef.current.size);
         setMessage(null);
-        setError(saveError instanceof Error ? saveError.message : "Unable to save queued changes.");
-        scheduleQueuedSave(2000);
+        setError(
+          forceMemberRefresh
+            ? null
+            : saveError instanceof Error
+              ? saveError.message
+              : "Unable to save queued changes."
+        );
+
+        if (!forceMemberRefresh) {
+          scheduleQueuedSave(2000);
+        }
+
         return false;
       }
     }
@@ -2299,6 +2352,22 @@ export function SpreadsheetWorkspace({
       return;
     }
 
+    if (latestSnapshotRef.current.currentUser.role === Role.MEMBER) {
+      clearAutosaveTimer();
+      clearInFlightTimeout();
+      saveQueueRef.current.clear();
+      inFlightUpdatesRef.current.clear();
+      saveInFlightRef.current = false;
+      setIsSavingCells(false);
+      setPendingSaveCount(0);
+      setRows(latestSnapshotRef.current.rows);
+      rowsRef.current = latestSnapshotRef.current.rows;
+      setMessage(null);
+      setError(null);
+      setMemberRuleViolation(payload.message);
+      return;
+    }
+
     if (payload.row && payload.col) {
       finishInFlightUpdate(payload.row, payload.col);
     } else {
@@ -2321,6 +2390,7 @@ export function SpreadsheetWorkspace({
     setMessage(null);
     setError(payload.message);
   }, [
+    clearAutosaveTimer,
     clearInFlightTimeout,
     finishInFlightUpdate,
     restoreCommittedRowsWithOptimisticEdits,
@@ -3788,6 +3858,7 @@ export function SpreadsheetWorkspace({
   }, [applyPastedText, snapshot.columns, startTransition]);
 
   const columns = useMemo<Column<SheetGridRow, SheetGridRow>[]>(() => {
+    const frozenHeaderColumnKey = snapshot.viewSetting.frozenHeaderColumnKey;
     const rowColumn: Column<SheetGridRow, SheetGridRow> = {
       key: "rowNumber",
       name: "#",
@@ -3806,10 +3877,13 @@ export function SpreadsheetWorkspace({
 
     return [
       rowColumn,
-      ...snapshot.columns.map(
-        (columnKey): Column<SheetGridRow, SheetGridRow> => ({
+      ...snapshot.columns.map((columnKey): Column<SheetGridRow, SheetGridRow> => {
+        const isHeaderColumn = frozenHeaderColumnKey === columnKey;
+
+        return {
           key: columnKey,
           name: columnKey,
+          frozen: isHeaderColumn,
           width: DEFAULT_DATA_COLUMN_WIDTH,
           minWidth: 1,
           resizable: true,
@@ -3836,6 +3910,7 @@ export function SpreadsheetWorkspace({
               lockedByOther && "sheet-cell-live-locked",
               row.ownerId && "sheet-cell-owned",
               row.__formula[columnKey] && "sheet-cell-formula",
+              isHeaderColumn && "sheet-frozen-header-cell",
               isCellInsideRange(row.rowNumber, columnKey, selectedRange, snapshot.columns) &&
                 "sheet-cell-range-selected",
               selectedRange?.anchor.rowIndex === row.rowNumber &&
@@ -3892,20 +3967,59 @@ export function SpreadsheetWorkspace({
               </div>
             );
           }
-        })
-      )
+        };
+      })
     ];
   }, [
     copyLinkToClipboard,
     locks,
     snapshot.columns,
     snapshot.currentUser.id,
+    snapshot.viewSetting.frozenHeaderColumnKey,
     SpreadsheetTextEditor,
     selectedRange
   ]);
 
   return (
     <section className="space-y-4">
+      {memberRuleViolation ? (
+        <div
+          aria-labelledby="member-rule-violation-title"
+          aria-modal="true"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4"
+          role="alertdialog"
+        >
+          <div className="w-full max-w-md rounded-lg border border-rose-300 bg-[color:var(--panel)] p-5 shadow-xl dark:border-rose-900">
+            <div className="flex items-start gap-3">
+              <AlertCircle
+                className="mt-0.5 shrink-0 text-rose-600 dark:text-rose-300"
+                size={22}
+              />
+              <div className="min-w-0">
+                <h2
+                  className="text-base font-semibold text-[color:var(--text)]"
+                  id="member-rule-violation-title"
+                >
+                  Change rejected
+                </h2>
+                <p className="mt-2 text-sm text-[color:var(--text)]">
+                  {memberRuleViolation}
+                </p>
+                <p className="mt-2 text-sm text-[color:var(--text-muted)]">
+                  Refresh the sheet before editing again so your screen matches the saved data.
+                </p>
+              </div>
+            </div>
+            <button
+              className="focus-ring mt-5 inline-flex h-10 w-full items-center justify-center rounded-md bg-rose-600 px-4 text-sm font-semibold text-white transition hover:bg-rose-700"
+              type="button"
+              onClick={() => window.location.reload()}
+            >
+              Refresh sheet
+            </button>
+          </div>
+        </div>
+      ) : null}
       <div className="flex flex-col gap-3 rounded-lg border border-[color:var(--line)] bg-[color:var(--panel)] p-4 shadow-sm lg:flex-row lg:items-center lg:justify-between">
         <div className="min-w-0">
           <h1 className="truncate text-lg font-semibold">{snapshot.sheet.name}</h1>
@@ -4023,6 +4137,22 @@ export function SpreadsheetWorkspace({
             >
               <Rows3 size={14} />
               Header row {snapshot.viewSetting.frozenHeaderRowIndex ?? "--"}
+            </ToolbarTextButton>
+            <ToolbarTextButton
+              active={
+                Boolean(selectedAdminColumnKey) &&
+                snapshot.viewSetting.frozenHeaderColumnKey === selectedAdminColumnKey
+              }
+              disabled={!selectedAdminColumnKey}
+              title="Set or clear the selected column as the frozen sheet header"
+              onClick={() =>
+                startTransition(() => {
+                  void toggleSelectedColumnHeader();
+                })
+              }
+            >
+              <Columns3 size={14} />
+              Header column {snapshot.viewSetting.frozenHeaderColumnKey ?? "--"}
             </ToolbarTextButton>
             <FormatIconButton
               active={selectedFormat.bold}

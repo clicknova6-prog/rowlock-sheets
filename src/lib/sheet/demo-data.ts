@@ -69,7 +69,8 @@ export function createDemoSnapshot(): SheetSnapshot {
       alternateRowColors: true,
       columnWidths: {},
       condensedView: false,
-      frozenHeaderRowIndex: null
+      frozenHeaderRowIndex: null,
+      frozenHeaderColumnKey: null
     },
     columnPermissions: COLUMN_KEYS.map((columnKey) => ({
       columnKey,

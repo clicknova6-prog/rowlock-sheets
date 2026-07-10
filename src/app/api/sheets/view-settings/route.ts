@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { getCurrentUser } from "@/lib/auth/session";
-import { MAX_ROWS } from "@/lib/constants";
+import { COLUMN_KEYS, MAX_ROWS } from "@/lib/constants";
 import { mirrorSheetConfigToRealtimeDatabase } from "@/lib/firebase/realtime-sheet-mirror";
 import { SheetRuleError, updateSheetViewSettings } from "@/lib/sheet/service";
 import { getSheetSnapshot } from "@/lib/sheet/snapshot";
@@ -10,7 +10,8 @@ const updateSheetViewSettingsSchema = z.object({
   sheetId: z.string().min(1),
   columnWidths: z.record(z.string(), z.number().int().min(1).max(5000)).optional(),
   condensedView: z.boolean().optional(),
-  frozenHeaderRowIndex: z.number().int().min(1).max(MAX_ROWS).nullable().optional()
+  frozenHeaderRowIndex: z.number().int().min(1).max(MAX_ROWS).nullable().optional(),
+  frozenHeaderColumnKey: z.enum(COLUMN_KEYS).nullable().optional()
 });
 
 export async function POST(request: Request): Promise<NextResponse> {

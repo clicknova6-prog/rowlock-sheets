@@ -466,6 +466,7 @@ describe("sheet row building", () => {
           columnWidths: {},
           condensedView: false,
           frozenHeaderRowIndex: null,
+          frozenHeaderColumnKey: null,
           memberEditLockAt: null
         },
         columnPermissions: [],
@@ -512,6 +513,7 @@ describe("sheet row building", () => {
           columnWidths: {},
           condensedView: false,
           frozenHeaderRowIndex: null,
+          frozenHeaderColumnKey: null,
           memberEditLockAt: null
         },
         columnPermissions: [],

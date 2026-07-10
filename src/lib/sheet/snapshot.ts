@@ -10,6 +10,7 @@ import {
   normalizeHorizontalAlign,
   normalizeSheetColumnWidths,
   normalizeSheetCondensedView,
+  normalizeSheetFrozenHeaderColumnKey,
   normalizeSheetFrozenHeaderRowIndex,
   normalizeSheetFontSize
 } from "./formatting";
@@ -290,6 +291,7 @@ export async function getSheetSnapshot(
         fontSize: true,
         columnWidths: true,
         condensedView: true,
+        frozenHeaderColumnKey: true,
         frozenHeaderRowIndex: true,
         memberEditLockAt: true
       }
@@ -478,6 +480,9 @@ export async function getSheetSnapshot(
       condensedView: normalizeSheetCondensedView(viewSetting?.condensedView),
       frozenHeaderRowIndex: normalizeSheetFrozenHeaderRowIndex(
         viewSetting?.frozenHeaderRowIndex
+      ),
+      frozenHeaderColumnKey: normalizeSheetFrozenHeaderColumnKey(
+        viewSetting?.frozenHeaderColumnKey
       ),
       memberEditLockAt: viewSetting?.memberEditLockAt?.toISOString() ?? null
     },

@@ -575,7 +575,7 @@ export function AdminDashboard({
                 />
                 Condensed view
               </label>
-              <div className="grid gap-3 sm:grid-cols-3">
+              <div className="grid gap-3 sm:grid-cols-4">
                 <label>
                   <FieldLabel>Odd rows</FieldLabel>
                   <ColorInput
@@ -612,6 +612,21 @@ export function AdminDashboard({
                     type="number"
                   />
                   <HelpText>This row stays pinned while members scroll.</HelpText>
+                </label>
+                <label>
+                  <FieldLabel>Header column</FieldLabel>
+                  <SelectInput
+                    defaultValue={snapshot.viewSetting.frozenHeaderColumnKey ?? ""}
+                    name="frozenHeaderColumnKey"
+                  >
+                    <option value="">No frozen column</option>
+                    {COLUMN_KEYS.map((columnKey) => (
+                      <option key={columnKey} value={columnKey}>
+                        {columnKey}
+                      </option>
+                    ))}
+                  </SelectInput>
+                  <HelpText>This column stays pinned while members scroll.</HelpText>
                 </label>
               </div>
               <ActionButton>

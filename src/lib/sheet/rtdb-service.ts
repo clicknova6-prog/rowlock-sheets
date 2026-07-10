@@ -21,6 +21,7 @@ import {
   normalizeHorizontalAlign,
   normalizeSheetColumnWidths,
   normalizeSheetCondensedView,
+  normalizeSheetFrozenHeaderColumnKey,
   normalizeSheetFrozenHeaderRowIndex,
   normalizeSheetFontSize
 } from "./formatting";
@@ -242,6 +243,7 @@ function normalizeViewSetting(value: unknown): SheetViewSettingState {
     columnWidths: normalizeSheetColumnWidths(record.columnWidths),
     condensedView: normalizeSheetCondensedView(record.condensedView),
     frozenHeaderRowIndex: normalizeSheetFrozenHeaderRowIndex(record.frozenHeaderRowIndex),
+    frozenHeaderColumnKey: normalizeSheetFrozenHeaderColumnKey(record.frozenHeaderColumnKey),
     memberEditLockAt: asNullableString(record.memberEditLockAt)
   };
 }
@@ -1437,6 +1439,11 @@ export async function updateRealtimeSheetViewSettings(
       ? {}
       : {
           frozenHeaderRowIndex: normalizeSheetFrozenHeaderRowIndex(input.frozenHeaderRowIndex)
+        }),
+    ...(input.frozenHeaderColumnKey === undefined
+      ? {}
+      : {
+          frozenHeaderColumnKey: normalizeSheetFrozenHeaderColumnKey(input.frozenHeaderColumnKey)
         }),
     ...(input.memberEditLockAt === undefined
       ? {}

@@ -28,6 +28,7 @@ import {
   DEFAULT_SHEET_VIEW_SETTING,
   normalizeHexColor,
   normalizeSheetCondensedView,
+  normalizeSheetFrozenHeaderColumnKey,
   normalizeSheetFontSize,
   normalizeSheetFrozenHeaderRowIndex
 } from "@/lib/sheet/formatting";
@@ -368,6 +369,9 @@ export async function saveSheetViewSettingsAction(formData: FormData): Promise<v
   const frozenHeaderRowIndex = normalizeSheetFrozenHeaderRowIndex(
     getString(formData, "frozenHeaderRowIndex")
   );
+  const frozenHeaderColumnKey = normalizeSheetFrozenHeaderColumnKey(
+    getString(formData, "frozenHeaderColumnKey")
+  );
 
   if (isRealtimeDatabaseSource()) {
     await updateSheetViewSettings(actor, {
@@ -377,7 +381,8 @@ export async function saveSheetViewSettingsAction(formData: FormData): Promise<v
       alternateEvenColor,
       fontSize,
       condensedView,
-      frozenHeaderRowIndex
+      frozenHeaderRowIndex,
+      frozenHeaderColumnKey
     });
     await publishSheetSettingsRefresh(sheetId, actor);
     refreshApp();
@@ -394,7 +399,8 @@ export async function saveSheetViewSettingsAction(formData: FormData): Promise<v
         alternateEvenColor,
         fontSize,
         condensedView,
-        frozenHeaderRowIndex
+        frozenHeaderRowIndex,
+        frozenHeaderColumnKey
       },
       update: {
         alternateRowColors,
@@ -402,7 +408,8 @@ export async function saveSheetViewSettingsAction(formData: FormData): Promise<v
         alternateEvenColor,
         fontSize,
         condensedView,
-        frozenHeaderRowIndex
+        frozenHeaderRowIndex,
+        frozenHeaderColumnKey
       }
     });
 
@@ -803,6 +810,7 @@ export async function scheduleMemberSheetLockAction(formData: FormData): Promise
         columnWidths: DEFAULT_SHEET_VIEW_SETTING.columnWidths,
         condensedView: DEFAULT_SHEET_VIEW_SETTING.condensedView,
         frozenHeaderRowIndex: DEFAULT_SHEET_VIEW_SETTING.frozenHeaderRowIndex,
+        frozenHeaderColumnKey: DEFAULT_SHEET_VIEW_SETTING.frozenHeaderColumnKey,
         memberEditLockAt
       },
       update: { memberEditLockAt }
@@ -852,6 +860,7 @@ export async function unlockMemberSheetEditingAction(formData: FormData): Promis
         columnWidths: DEFAULT_SHEET_VIEW_SETTING.columnWidths,
         condensedView: DEFAULT_SHEET_VIEW_SETTING.condensedView,
         frozenHeaderRowIndex: DEFAULT_SHEET_VIEW_SETTING.frozenHeaderRowIndex,
+        frozenHeaderColumnKey: DEFAULT_SHEET_VIEW_SETTING.frozenHeaderColumnKey,
         memberEditLockAt: null
       },
       update: { memberEditLockAt: null }
