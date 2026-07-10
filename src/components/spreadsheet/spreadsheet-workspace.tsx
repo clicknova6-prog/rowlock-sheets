@@ -3859,6 +3859,14 @@ export function SpreadsheetWorkspace({
 
   const columns = useMemo<Column<SheetGridRow, SheetGridRow>[]>(() => {
     const frozenHeaderColumnKey = snapshot.viewSetting.frozenHeaderColumnKey;
+    const frozenHeaderColumnPermission = frozenHeaderColumnKey
+      ? snapshot.columnPermissions.find(
+          (permission) => permission.columnKey === frozenHeaderColumnKey
+        ) ?? null
+      : null;
+    const shouldPinHeaderColumn =
+      snapshot.currentUser.role === Role.ADMIN ||
+      !frozenHeaderColumnPermission?.editableByMember;
     const rowColumn: Column<SheetGridRow, SheetGridRow> = {
       key: "rowNumber",
       name: "#",
@@ -3883,7 +3891,7 @@ export function SpreadsheetWorkspace({
         return {
           key: columnKey,
           name: columnKey,
-          frozen: isHeaderColumn,
+          frozen: isHeaderColumn && shouldPinHeaderColumn,
           width: DEFAULT_DATA_COLUMN_WIDTH,
           minWidth: 1,
           resizable: true,
@@ -3973,7 +3981,9 @@ export function SpreadsheetWorkspace({
   }, [
     copyLinkToClipboard,
     locks,
+    snapshot.columnPermissions,
     snapshot.columns,
+    snapshot.currentUser.role,
     snapshot.currentUser.id,
     snapshot.viewSetting.frozenHeaderColumnKey,
     SpreadsheetTextEditor,
