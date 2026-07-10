@@ -3918,7 +3918,7 @@ export function SpreadsheetWorkspace({
               lockedByOther && "sheet-cell-live-locked",
               row.ownerId && "sheet-cell-owned",
               row.__formula[columnKey] && "sheet-cell-formula",
-              isHeaderColumn && "sheet-frozen-header-cell",
+              isHeaderColumn && shouldPinHeaderColumn && "sheet-frozen-header-cell",
               isCellInsideRange(row.rowNumber, columnKey, selectedRange, snapshot.columns) &&
                 "sheet-cell-range-selected",
               selectedRange?.anchor.rowIndex === row.rowNumber &&
