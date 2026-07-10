@@ -3903,6 +3903,15 @@ export function SpreadsheetWorkspace({
               columnKey,
               snapshot.currentUser.id
             );
+            const isRangeSelected = isCellInsideRange(
+              row.rowNumber,
+              columnKey,
+              selectedRange,
+              snapshot.columns
+            );
+            const isRangeAnchor =
+              selectedRange?.anchor.rowIndex === row.rowNumber &&
+              selectedRange.anchor.columnKey === columnKey;
 
             return clsx(
               "sheet-cell",
@@ -3911,22 +3920,32 @@ export function SpreadsheetWorkspace({
               row.ownerId && "sheet-cell-owned",
               row.__formula[columnKey] && "sheet-cell-formula",
               isHeaderColumn && "sheet-header-column-cell",
-              isCellInsideRange(row.rowNumber, columnKey, selectedRange, snapshot.columns) &&
-                "sheet-cell-range-selected",
-              selectedRange?.anchor.rowIndex === row.rowNumber &&
-                selectedRange.anchor.columnKey === columnKey &&
-                "sheet-cell-range-anchor"
+              isRangeSelected &&
+                (isHeaderColumn ? "sheet-header-column-selected" : "sheet-cell-range-selected"),
+              isRangeAnchor &&
+                (isHeaderColumn ? "sheet-header-column-anchor" : "sheet-cell-range-anchor")
             );
           },
-          summaryCellClass: (row: SheetGridRow) =>
-            clsx(
-              "sheet-cell sheet-frozen-header-cell",
-              isCellInsideRange(row.rowNumber, columnKey, selectedRange, snapshot.columns) &&
-                "sheet-cell-range-selected",
+          summaryCellClass: (row: SheetGridRow) => {
+            const isRangeSelected = isCellInsideRange(
+              row.rowNumber,
+              columnKey,
+              selectedRange,
+              snapshot.columns
+            );
+            const isRangeAnchor =
               selectedRange?.anchor.rowIndex === row.rowNumber &&
-                selectedRange.anchor.columnKey === columnKey &&
-                "sheet-cell-range-anchor"
-            ),
+              selectedRange.anchor.columnKey === columnKey;
+
+            return clsx(
+              "sheet-cell sheet-frozen-header-cell",
+              isHeaderColumn && "sheet-header-column-cell",
+              isRangeSelected &&
+                (isHeaderColumn ? "sheet-header-column-selected" : "sheet-cell-range-selected"),
+              isRangeAnchor &&
+                (isHeaderColumn ? "sheet-header-column-anchor" : "sheet-cell-range-anchor")
+            );
+          },
           renderCell: ({ row }) => {
             const lock = locks.get(getCellLockMapKey(row.rowNumber, columnKey));
             const lockedByOther = lock && lock.userId !== snapshot.currentUser.id;
