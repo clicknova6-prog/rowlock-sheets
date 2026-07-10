@@ -3859,6 +3859,9 @@ export function SpreadsheetWorkspace({
 
   const columns = useMemo<Column<SheetGridRow, SheetGridRow>[]>(() => {
     const frozenHeaderColumnKey = snapshot.viewSetting.frozenHeaderColumnKey;
+    const frozenHeaderColumnIndex = frozenHeaderColumnKey
+      ? snapshot.columns.indexOf(frozenHeaderColumnKey)
+      : -1;
     const rowColumn: Column<SheetGridRow, SheetGridRow> = {
       key: "rowNumber",
       name: "#",
@@ -3877,13 +3880,15 @@ export function SpreadsheetWorkspace({
 
     return [
       rowColumn,
-      ...snapshot.columns.map((columnKey): Column<SheetGridRow, SheetGridRow> => {
+      ...snapshot.columns.map((columnKey, columnIndex): Column<SheetGridRow, SheetGridRow> => {
         const isHeaderColumn = frozenHeaderColumnKey === columnKey;
+        const isPinnedHeaderRegionColumn =
+          frozenHeaderColumnIndex >= 0 && columnIndex <= frozenHeaderColumnIndex;
 
         return {
           key: columnKey,
           name: columnKey,
-          frozen: isHeaderColumn,
+          frozen: isPinnedHeaderRegionColumn,
           width: DEFAULT_DATA_COLUMN_WIDTH,
           minWidth: 1,
           resizable: true,
@@ -3921,9 +3926,13 @@ export function SpreadsheetWorkspace({
               row.__formula[columnKey] && "sheet-cell-formula",
               isHeaderColumn && "sheet-header-column-cell",
               isRangeSelected &&
-                (isHeaderColumn ? "sheet-header-column-selected" : "sheet-cell-range-selected"),
+                (isPinnedHeaderRegionColumn
+                  ? "sheet-header-column-selected"
+                  : "sheet-cell-range-selected"),
               isRangeAnchor &&
-                (isHeaderColumn ? "sheet-header-column-anchor" : "sheet-cell-range-anchor")
+                (isPinnedHeaderRegionColumn
+                  ? "sheet-header-column-anchor"
+                  : "sheet-cell-range-anchor")
             );
           },
           summaryCellClass: (row: SheetGridRow) => {
@@ -3941,9 +3950,13 @@ export function SpreadsheetWorkspace({
               "sheet-cell sheet-frozen-header-cell",
               isHeaderColumn && "sheet-header-column-cell",
               isRangeSelected &&
-                (isHeaderColumn ? "sheet-header-column-selected" : "sheet-cell-range-selected"),
+                (isPinnedHeaderRegionColumn
+                  ? "sheet-header-column-selected"
+                  : "sheet-cell-range-selected"),
               isRangeAnchor &&
-                (isHeaderColumn ? "sheet-header-column-anchor" : "sheet-cell-range-anchor")
+                (isPinnedHeaderRegionColumn
+                  ? "sheet-header-column-anchor"
+                  : "sheet-cell-range-anchor")
             );
           },
           renderCell: ({ row }) => {
