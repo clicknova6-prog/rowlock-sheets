@@ -3859,14 +3859,6 @@ export function SpreadsheetWorkspace({
 
   const columns = useMemo<Column<SheetGridRow, SheetGridRow>[]>(() => {
     const frozenHeaderColumnKey = snapshot.viewSetting.frozenHeaderColumnKey;
-    const frozenHeaderColumnPermission = frozenHeaderColumnKey
-      ? snapshot.columnPermissions.find(
-          (permission) => permission.columnKey === frozenHeaderColumnKey
-        ) ?? null
-      : null;
-    const shouldPinHeaderColumn =
-      snapshot.currentUser.role === Role.ADMIN ||
-      !frozenHeaderColumnPermission?.editableByMember;
     const rowColumn: Column<SheetGridRow, SheetGridRow> = {
       key: "rowNumber",
       name: "#",
@@ -3891,7 +3883,7 @@ export function SpreadsheetWorkspace({
         return {
           key: columnKey,
           name: columnKey,
-          frozen: isHeaderColumn && shouldPinHeaderColumn,
+          frozen: isHeaderColumn,
           width: DEFAULT_DATA_COLUMN_WIDTH,
           minWidth: 1,
           resizable: true,
@@ -3918,7 +3910,7 @@ export function SpreadsheetWorkspace({
               lockedByOther && "sheet-cell-live-locked",
               row.ownerId && "sheet-cell-owned",
               row.__formula[columnKey] && "sheet-cell-formula",
-              isHeaderColumn && shouldPinHeaderColumn && "sheet-frozen-header-cell",
+              isHeaderColumn && "sheet-header-column-cell",
               isCellInsideRange(row.rowNumber, columnKey, selectedRange, snapshot.columns) &&
                 "sheet-cell-range-selected",
               selectedRange?.anchor.rowIndex === row.rowNumber &&
@@ -3981,9 +3973,7 @@ export function SpreadsheetWorkspace({
   }, [
     copyLinkToClipboard,
     locks,
-    snapshot.columnPermissions,
     snapshot.columns,
-    snapshot.currentUser.role,
     snapshot.currentUser.id,
     snapshot.viewSetting.frozenHeaderColumnKey,
     SpreadsheetTextEditor,

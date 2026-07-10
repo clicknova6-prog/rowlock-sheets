@@ -195,6 +195,15 @@ option {
   background-color: var(--panel-muted);
 }
 
+.sheet-header-column-cell {
+  box-shadow: inset 3px 0 0 rgba(20, 184, 166, 0.55);
+}
+
+.sheet-header-column-cell.sheet-cell-range-selected::after,
+.sheet-header-column-cell.sheet-cell-range-anchor::after {
+  background: transparent;
+}
+
 .sheet-cell-word {
   overflow-wrap: anywhere;
   word-break: normal;
