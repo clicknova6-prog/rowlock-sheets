@@ -3848,6 +3848,21 @@ export function SpreadsheetWorkspace({
           if (event.key === "Escape") {
             onClose(false);
           }
+
+          if (
+            event.key === " " &&
+            value.length > 0 &&
+            event.currentTarget.selectionStart === 0 &&
+            event.currentTarget.selectionEnd === value.length &&
+            isColumnKey(columnKey, snapshot.columns)
+          ) {
+            const nextValue = `${value} `;
+            event.preventDefault();
+            onRowChange({ ...row, [columnKey]: nextValue });
+            requestAnimationFrame(() => {
+              event.currentTarget.setSelectionRange(nextValue.length, nextValue.length);
+            });
+          }
         }}
         onPaste={(event) => {
           if (!isColumnKey(columnKey, snapshot.columns)) {
@@ -3857,6 +3872,21 @@ export function SpreadsheetWorkspace({
           const clipboardText = event.clipboardData.getData("text/plain");
 
           if (!clipboardText.includes("\t") && !clipboardText.includes("\n") && !clipboardText.includes("\r")) {
+            const input = event.currentTarget;
+            const selectionStart = input.selectionStart ?? value.length;
+            const selectionEnd = input.selectionEnd ?? value.length;
+            const replacingWholeValue =
+              value.length > 0 && selectionStart === 0 && selectionEnd === value.length;
+            const insertAt = replacingWholeValue ? value.length : selectionStart;
+            const removeUntil = replacingWholeValue ? value.length : selectionEnd;
+            const nextValue = `${value.slice(0, insertAt)}${clipboardText}${value.slice(removeUntil)}`;
+
+            event.preventDefault();
+            onRowChange({ ...row, [columnKey]: nextValue });
+            requestAnimationFrame(() => {
+              const caret = insertAt + clipboardText.length;
+              input.setSelectionRange(caret, caret);
+            });
             return;
           }
 
