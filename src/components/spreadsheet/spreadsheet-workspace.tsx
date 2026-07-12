@@ -90,6 +90,10 @@ interface SelectedCell {
   columnKey: ColumnKey;
 }
 
+interface AppendPasteCell extends SelectedCell {
+  initialValue: string;
+}
+
 interface SelectedCellRange {
   anchor: SelectedCell;
   focus: SelectedCell;
@@ -727,6 +731,10 @@ function parseClipboardGrid(text: string): string[][] {
     .map((line) => line.split("\t"));
 }
 
+function isSingleCellClipboardGrid(grid: string[][]): boolean {
+  return grid.length === 1 && grid[0]?.length === 1;
+}
+
 function parseColumnCheckTerms(text: string): string[] {
   const terms = new Set<string>();
 
@@ -1262,7 +1270,12 @@ function getDemoCellHistory(
 interface SpreadsheetTextInputEditorProps
   extends RenderEditCellProps<SheetGridRow, SheetGridRow> {
   columns: ColumnKey[];
+  onEditSessionEnd: () => void;
   onMultiCellPaste: (rowIndex: number, columnKey: ColumnKey, clipboardText: string) => void;
+}
+
+interface TextInsertOptions {
+  recoverBlankFromInitial?: boolean;
 }
 
 function SpreadsheetTextInputEditor({
@@ -1271,6 +1284,7 @@ function SpreadsheetTextInputEditor({
   onRowChange,
   onClose,
   columns,
+  onEditSessionEnd,
   onMultiCellPaste
 }: SpreadsheetTextInputEditorProps) {
   const rawColumnKey = column.key;
@@ -1278,6 +1292,7 @@ function SpreadsheetTextInputEditor({
   const activeCellKey = `${row.rowNumber}:${rawColumnKey}`;
   const initialValue = columnKey ? String(row[columnKey] ?? "") : "";
   const [draftValue, setDraftValue] = useState(initialValue);
+  const initialValueRef = useRef(initialValue);
   const inputRef = useRef<HTMLInputElement | null>(null);
 
   const updateDraftValue = useCallback((
@@ -1295,20 +1310,66 @@ function SpreadsheetTextInputEditor({
     });
   }, [columnKey, onRowChange, row]);
 
-  const appendIfWholeValueSelected = useCallback((text: string): boolean => {
+  const insertTextIntoDraft = useCallback((
+    text: string,
+    options: TextInsertOptions = {}
+  ): boolean => {
     const input = inputRef.current;
 
-    if (!input || !columnKey || input.value.length === 0) {
+    if (!input || !columnKey) {
       return false;
     }
 
-    if (input.selectionStart !== 0 || input.selectionEnd !== input.value.length) {
-      return false;
+    const currentValue = input.value;
+    const initialCellValue = initialValueRef.current;
+    const selectionStart = input.selectionStart ?? currentValue.length;
+    const selectionEnd = input.selectionEnd ?? currentValue.length;
+    const isWholeValueSelected =
+      selectionStart === 0 && selectionEnd === currentValue.length;
+    let nextValue: string;
+    let nextCaretPosition: number;
+
+    if (
+      options.recoverBlankFromInitial &&
+      initialCellValue &&
+      currentValue !== initialCellValue &&
+      currentValue.trim() === ""
+    ) {
+      const prefix = `${initialCellValue}${
+        currentValue.length > 0
+          ? currentValue
+          : initialCellValue.length > 0 && !/\s$/.test(initialCellValue) && !/^\s/.test(text)
+            ? " "
+            : ""
+      }`;
+      const pastedText =
+        prefix.length > 0 && !/\s$/.test(prefix) && !/^\s/.test(text)
+          ? ` ${text}`
+          : text;
+
+      nextValue = `${prefix}${pastedText}`;
+      nextCaretPosition = nextValue.length;
+    } else if (initialCellValue && isWholeValueSelected && currentValue === initialCellValue) {
+      const appendedText =
+        currentValue.length > 0 && !/\s$/.test(currentValue) && !/^\s/.test(text)
+          ? ` ${text}`
+          : text;
+
+      nextValue = `${currentValue}${appendedText}`;
+      nextCaretPosition = nextValue.length;
+    } else {
+      nextValue = `${currentValue.slice(0, selectionStart)}${text}${currentValue.slice(selectionEnd)}`;
+      nextCaretPosition = selectionStart + text.length;
     }
 
-    updateDraftValue(`${input.value}${text}`);
+    updateDraftValue(nextValue, nextCaretPosition);
     return true;
   }, [columnKey, updateDraftValue]);
+
+  const closeEditor = useCallback((commitChanges: boolean): void => {
+    onEditSessionEnd();
+    onClose(commitChanges);
+  }, [onClose, onEditSessionEnd]);
 
   useLayoutEffect(() => {
     const input = inputRef.current;
@@ -1317,9 +1378,22 @@ function SpreadsheetTextInputEditor({
       return;
     }
 
-    input.focus();
-    const end = input.value.length;
-    input.setSelectionRange(end, end);
+    const editorInput = input;
+
+    function moveCaretToEnd(): void {
+      editorInput.focus();
+      const end = editorInput.value.length;
+      editorInput.setSelectionRange(end, end);
+    }
+
+    moveCaretToEnd();
+    const animationFrameId = requestAnimationFrame(moveCaretToEnd);
+    const timeoutId = window.setTimeout(moveCaretToEnd, 0);
+
+    return () => {
+      cancelAnimationFrame(animationFrameId);
+      window.clearTimeout(timeoutId);
+    };
   }, [activeCellKey]);
 
   return (
@@ -1327,7 +1401,7 @@ function SpreadsheetTextInputEditor({
       ref={inputRef}
       className="h-full w-full border-0 bg-[color:var(--panel)] px-2 text-sm text-[color:var(--text)] outline-none"
       value={draftValue}
-      onBlur={() => onClose(true)}
+      onBlur={() => closeEditor(true)}
       onBeforeInput={(event) => {
         const nativeEvent = event.nativeEvent as InputEvent;
 
@@ -1335,12 +1409,9 @@ function SpreadsheetTextInputEditor({
           return;
         }
 
-        if (!appendIfWholeValueSelected(nativeEvent.data)) {
-          return;
-        }
-
         event.preventDefault();
         event.stopPropagation();
+        insertTextIntoDraft(nativeEvent.data);
       }}
       onChange={(event) => {
         if (!columnKey) {
@@ -1351,19 +1422,19 @@ function SpreadsheetTextInputEditor({
         onRowChange({ ...row, [columnKey]: event.target.value });
       }}
       onKeyDown={(event) => {
-        if (event.key === " " && appendIfWholeValueSelected(" ")) {
+        if (event.key === " " && !event.ctrlKey && !event.metaKey && insertTextIntoDraft(" ")) {
           event.preventDefault();
           event.stopPropagation();
           return;
         }
 
         if (event.key === "Enter") {
-          onClose(true);
+          closeEditor(true);
           return;
         }
 
         if (event.key === "Escape") {
-          onClose(false);
+          closeEditor(false);
         }
       }}
       onPaste={(event) => {
@@ -1372,20 +1443,20 @@ function SpreadsheetTextInputEditor({
         }
 
         const clipboardText = event.clipboardData.getData("text/plain");
-
-        if (clipboardText.includes("\t") || clipboardText.includes("\n") || clipboardText.includes("\r")) {
-          event.preventDefault();
-          onClose(false);
-          onMultiCellPaste(row.rowNumber, columnKey, clipboardText);
-          return;
-        }
-
-        if (!appendIfWholeValueSelected(clipboardText)) {
+        if (!clipboardText) {
           return;
         }
 
         event.preventDefault();
         event.stopPropagation();
+
+        if (clipboardText.includes("\t") || clipboardText.includes("\n") || clipboardText.includes("\r")) {
+          closeEditor(false);
+          onMultiCellPaste(row.rowNumber, columnKey, clipboardText);
+          return;
+        }
+
+        insertTextIntoDraft(clipboardText, { recoverBlankFromInitial: true });
       }}
     />
   );
@@ -1427,6 +1498,7 @@ export function SpreadsheetWorkspace({
   const dataGridRef = useRef<DataGridHandle | null>(null);
   const selectedCellRef = useRef<SelectedCell | null>(null);
   const selectedRangeRef = useRef<SelectedCellRange | null>(null);
+  const appendPasteCellRef = useRef<AppendPasteCell | null>(null);
   const isRangeSelectingRef = useRef(false);
   const selectionKeyboardActiveRef = useRef(false);
   const selectionAutoScrollRef = useRef<SelectionAutoScrollState>({
@@ -3649,6 +3721,47 @@ export function SpreadsheetWorkspace({
       return;
     }
 
+    const appendPasteCell = appendPasteCellRef.current;
+
+    if (
+      appendPasteCell &&
+      isSingleCellClipboardGrid(pastedGrid)
+    ) {
+      const targetRowIndex = appendPasteCell.rowIndex;
+      const targetColumnKey = appendPasteCell.columnKey;
+      const row = rows.find((item) => item.rowNumber === targetRowIndex);
+
+      if (
+        row &&
+        row.__editable[targetColumnKey] &&
+        !isCellLockedByOther(locks, targetRowIndex, targetColumnKey, snapshot.currentUser.id)
+      ) {
+        appendPasteCellRef.current = null;
+        const visibleValue = getRawCellValue(row, targetColumnKey);
+        const currentValue =
+          appendPasteCell.initialValue &&
+          (visibleValue === "" || visibleValue === " ")
+            ? appendPasteCell.initialValue
+            : visibleValue;
+        const separator =
+          currentValue.length > 0 && !/\s$/.test(currentValue) ? " " : "";
+        const update = {
+          rowIndex: targetRowIndex,
+          columnKey: targetColumnKey,
+          value: `${currentValue}${separator}${pastedGrid[0][0]}`
+        };
+        const nextRows = applyUpdatesToRows(rows, [update]);
+
+        setRows(nextRows);
+        rowsRef.current = nextRows;
+        recordCellEditHistory(rows, [update]);
+        queueCellUpdates([update], `${targetColumnKey}${targetRowIndex} changed.`);
+        setError(null);
+        setMessage(`Appended pasted text to ${targetColumnKey}${targetRowIndex}.`);
+        return;
+      }
+    }
+
     const startColumnIndex = snapshot.columns.indexOf(startColumnKey);
     let nextSnapshot = snapshot;
     let firstError: string | null = null;
@@ -3955,6 +4068,9 @@ export function SpreadsheetWorkspace({
         row={row}
         rowIdx={rowIdx}
         onClose={onClose}
+        onEditSessionEnd={() => {
+          appendPasteCellRef.current = null;
+        }}
         onMultiCellPaste={(rowIndex, columnKey, clipboardText) => {
           startTransition(() => {
             void applyPastedText(rowIndex, columnKey, clipboardText);
@@ -4596,6 +4712,7 @@ export function SpreadsheetWorkspace({
           onFill={isAdmin ? handleFill : undefined}
           onCellMouseDown={(args, event) => {
             selectionKeyboardActiveRef.current = true;
+            appendPasteCellRef.current = null;
 
             if (!isAdmin) {
               return;
@@ -4653,6 +4770,7 @@ export function SpreadsheetWorkspace({
             event.preventGridDefault();
           }}
           onCellClick={(args) => {
+            appendPasteCellRef.current = null;
             args.selectCell(false);
           }}
           onCellDoubleClick={(args, event) => {
@@ -4666,6 +4784,11 @@ export function SpreadsheetWorkspace({
                 snapshot.currentUser.id
               )
             ) {
+              appendPasteCellRef.current = {
+                rowIndex: args.row.rowNumber,
+                columnKey: args.column.key,
+                initialValue: getRawCellValue(args.row, args.column.key)
+              };
               args.selectCell(true);
             }
 
