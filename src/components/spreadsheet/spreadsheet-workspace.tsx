@@ -13,6 +13,8 @@ import {
 import {
   AlertCircle,
   Bold,
+  ChevronDown,
+  ChevronUp,
   CheckCircle2,
   Columns3,
   Copy,
@@ -26,6 +28,7 @@ import {
   Palette,
   Rows3,
   Save,
+  Search,
   ShieldCheck,
   Sigma,
   TextAlignCenter,
@@ -733,6 +736,50 @@ function parseClipboardGrid(text: string): string[][] {
 
 function isSingleCellClipboardGrid(grid: string[][]): boolean {
   return grid.length === 1 && grid[0]?.length === 1;
+}
+
+function isSameCell(
+  left: SelectedCell | null | undefined,
+  right: SelectedCell | null | undefined
+): boolean {
+  return Boolean(
+    left &&
+      right &&
+      left.rowIndex === right.rowIndex &&
+      left.columnKey === right.columnKey
+  );
+}
+
+function getFindMatches(
+  rows: SheetGridRow[],
+  columns: ColumnKey[],
+  query: string
+): SelectedCell[] {
+  const normalizedQuery = query.trim().toLowerCase();
+
+  if (!normalizedQuery) {
+    return [];
+  }
+
+  const matches: SelectedCell[] = [];
+
+  for (const row of rows) {
+    for (const columnKey of columns) {
+      const renderedValue = getRenderedCellValue(row, columnKey).toLowerCase();
+
+      if (!renderedValue.includes(normalizedQuery)) {
+        continue;
+      }
+
+      matches.push({
+        rowIndex: row.rowNumber,
+        columnKey
+      });
+      break;
+    }
+  }
+
+  return matches;
 }
 
 function parseColumnCheckTerms(text: string): string[] {
@@ -1480,6 +1527,9 @@ export function SpreadsheetWorkspace({
   const [columnCheckDialog, setColumnCheckDialog] =
     useState<ColumnCheckDialogState | null>(null);
   const [memberRuleViolation, setMemberRuleViolation] = useState<string | null>(null);
+  const [findOpen, setFindOpen] = useState(false);
+  const [findQuery, setFindQuery] = useState("");
+  const [activeFindCell, setActiveFindCell] = useState<SelectedCell | null>(null);
   const [locks, setLocks] = useState<Map<string, CellLockState>>(new Map());
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -1496,6 +1546,7 @@ export function SpreadsheetWorkspace({
   const columnWidthSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const gridShellRef = useRef<HTMLDivElement | null>(null);
   const dataGridRef = useRef<DataGridHandle | null>(null);
+  const findInputRef = useRef<HTMLInputElement | null>(null);
   const selectedCellRef = useRef<SelectedCell | null>(null);
   const selectedRangeRef = useRef<SelectedCellRange | null>(null);
   const appendPasteCellRef = useRef<AppendPasteCell | null>(null);
@@ -1591,6 +1642,30 @@ export function SpreadsheetWorkspace({
         : rows,
     [frozenHeaderRow, rows]
   );
+  const findMatches = useMemo<SelectedCell[]>(
+    () => getFindMatches(rows, snapshot.columns, findQuery),
+    [findQuery, rows, snapshot.columns]
+  );
+  const activeRenderedFindCell = useMemo<SelectedCell | null>(() => {
+    if (!findOpen || !findQuery.trim()) {
+      return null;
+    }
+
+    return (
+      findMatches.find((match) => isSameCell(match, activeFindCell)) ??
+      findMatches[0] ??
+      null
+    );
+  }, [activeFindCell, findMatches, findOpen, findQuery]);
+  const activeFindMatchIndex = useMemo(
+    () => findMatches.findIndex((match) => isSameCell(match, activeRenderedFindCell)),
+    [activeRenderedFindCell, findMatches]
+  );
+  const activeFindRowIndex = activeRenderedFindCell?.rowIndex ?? null;
+  const findStatusLabel =
+    findQuery.trim() && findMatches.length > 0 && activeFindMatchIndex >= 0
+      ? `${activeFindMatchIndex + 1}/${findMatches.length}`
+      : "0/0";
   const topSummaryRows = useMemo(
     () => (frozenHeaderRow ? [frozenHeaderRow] : undefined),
     [frozenHeaderRow]
@@ -2829,6 +2904,92 @@ export function SpreadsheetWorkspace({
     socketFocusCellRef.current(cell);
   }, [demoMode, socketSyncEnabled]);
 
+  const openFind = useCallback((): void => {
+    setFindOpen(true);
+    requestAnimationFrame(() => {
+      findInputRef.current?.focus();
+      findInputRef.current?.select();
+    });
+  }, []);
+
+  const closeFind = useCallback((): void => {
+    setFindOpen(false);
+    setActiveFindCell(null);
+    requestAnimationFrame(() => {
+      dataGridRef.current?.element?.focus();
+    });
+  }, []);
+
+  const focusFindCell = useCallback((cell: SelectedCell): void => {
+    const gridRowIndex = gridRows.findIndex((row) => row.rowNumber === cell.rowIndex);
+    const gridColumnIndex = snapshot.columns.indexOf(cell.columnKey) + 1;
+    const range = { anchor: cell, focus: cell };
+
+    setIsRangeSelecting(false);
+    isRangeSelectingRef.current = false;
+    selectedCellRef.current = cell;
+    selectedRangeRef.current = range;
+    setSelectedCell(cell);
+    setSelectedRange(range);
+    selectionKeyboardActiveRef.current = true;
+    focusLiveCell(cell);
+
+    if (gridRowIndex < 0 || gridColumnIndex <= 0) {
+      return;
+    }
+
+    requestAnimationFrame(() => {
+      dataGridRef.current?.scrollToCell({
+        rowIdx: gridRowIndex,
+        idx: gridColumnIndex
+      });
+      dataGridRef.current?.selectCell(
+        {
+          rowIdx: gridRowIndex,
+          idx: gridColumnIndex
+        },
+        {
+          enableEditor: false,
+          shouldFocusCell: false
+        }
+      );
+    });
+  }, [focusLiveCell, gridRows, snapshot.columns]);
+
+  const moveFindMatch = useCallback((direction: 1 | -1): void => {
+    if (!findQuery.trim()) {
+      findInputRef.current?.focus();
+      return;
+    }
+
+    if (findMatches.length === 0) {
+      setActiveFindCell(null);
+      findInputRef.current?.focus();
+      return;
+    }
+
+    const currentIndex =
+      activeFindMatchIndex >= 0 ? activeFindMatchIndex : direction === 1 ? -1 : 0;
+    const nextIndex = (currentIndex + direction + findMatches.length) % findMatches.length;
+    const nextCell = findMatches[nextIndex];
+
+    setActiveFindCell(nextCell);
+    focusFindCell(nextCell);
+  }, [activeFindMatchIndex, findMatches, findQuery, focusFindCell]);
+
+  const handleFindQueryChange = useCallback((nextQuery: string): void => {
+    setFindQuery(nextQuery);
+
+    const nextMatches = getFindMatches(rows, snapshot.columns, nextQuery);
+    const nextCell = nextMatches[0] ?? null;
+
+    setActiveFindCell(nextCell);
+
+    if (nextCell) {
+      focusFindCell(nextCell);
+    }
+  }, [focusFindCell, rows, snapshot.columns]);
+
   const blurActiveLiveCell = useCallback((): void => {
     const activeCell = activeSocketCellRef.current;
 
@@ -3632,6 +3793,7 @@ export function SpreadsheetWorkspace({
     ): React.ReactNode {
       const backgroundColor = getAlternateRowBackground(props.row, snapshot.viewSetting);
       const color = getReadableTextColorForBackground(backgroundColor);
+      const isFindActiveRow = activeFindRowIndex === props.row.rowNumber;
       const rowStyle =
         backgroundColor || color
           ? ({
@@ -3645,6 +3807,7 @@ export function SpreadsheetWorkspace({
         <Row
           key={key}
           {...props}
+          className={clsx(props.className, isFindActiveRow && "sheet-find-row")}
           style={rowStyle}
         />
       );
@@ -3708,7 +3871,7 @@ export function SpreadsheetWorkspace({
         />
       );
     }
-  }), [snapshot.columns, snapshot.viewSetting, updateRangeFocus]);
+  }), [activeFindRowIndex, snapshot.columns, snapshot.viewSetting, updateRangeFocus]);
 
   const applyPastedText = useCallback(async (
     startRowIndex: number,
@@ -3882,6 +4045,21 @@ export function SpreadsheetWorkspace({
     function handleSpreadsheetShortcut(event: KeyboardEvent): void {
       const shortcutKey = event.key.toLowerCase();
       const hasModifier = event.ctrlKey || event.metaKey;
+      const eventTargetIsFindInput = event.target === findInputRef.current;
+
+      if (
+        !event.defaultPrevented &&
+        hasModifier &&
+        shortcutKey === "f" &&
+        !event.altKey &&
+        (eventTargetIsFindInput ||
+          isSheetInteractionActive(event.target) ||
+          selectionKeyboardActiveRef.current)
+      ) {
+        event.preventDefault();
+        openFind();
+        return;
+      }
 
       if (
         event.defaultPrevented ||
@@ -3946,6 +4124,7 @@ export function SpreadsheetWorkspace({
   }, [
     isAdmin,
     isSheetInteractionActive,
+    openFind,
     queueFormatUpdate,
     redoLastCellEdit,
     selectAllCells,
@@ -4141,6 +4320,9 @@ export function SpreadsheetWorkspace({
             const isRangeAnchor =
               selectedRange?.anchor.rowIndex === row.rowNumber &&
               selectedRange.anchor.columnKey === columnKey;
+            const isFindActiveCell =
+              activeRenderedFindCell?.rowIndex === row.rowNumber &&
+              activeRenderedFindCell.columnKey === columnKey;
 
             return clsx(
               "sheet-cell",
@@ -4156,7 +4338,8 @@ export function SpreadsheetWorkspace({
               isRangeAnchor &&
                 (isPinnedHeaderRegionColumn
                   ? "sheet-header-column-anchor"
-                  : "sheet-cell-range-anchor")
+                  : "sheet-cell-range-anchor"),
+              isFindActiveCell && "sheet-find-active-cell"
             );
           },
           summaryCellClass: (row: SheetGridRow) => {
@@ -4169,6 +4352,9 @@ export function SpreadsheetWorkspace({
             const isRangeAnchor =
               selectedRange?.anchor.rowIndex === row.rowNumber &&
               selectedRange.anchor.columnKey === columnKey;
+            const isFindActiveCell =
+              activeRenderedFindCell?.rowIndex === row.rowNumber &&
+              activeRenderedFindCell.columnKey === columnKey;
 
             return clsx(
               "sheet-cell sheet-frozen-header-cell",
@@ -4180,7 +4366,8 @@ export function SpreadsheetWorkspace({
               isRangeAnchor &&
                 (isPinnedHeaderRegionColumn
                   ? "sheet-header-column-anchor"
-                  : "sheet-cell-range-anchor")
+                  : "sheet-cell-range-anchor"),
+              isFindActiveCell && "sheet-find-active-cell"
             );
           },
           renderCell: ({ row }) => {
@@ -4228,6 +4415,7 @@ export function SpreadsheetWorkspace({
     ];
   }, [
     copyLinkToClipboard,
+    activeRenderedFindCell,
     locks,
     snapshot.columns,
     snapshot.currentUser.id,
@@ -4627,6 +4815,65 @@ export function SpreadsheetWorkspace({
               </div>
             </div>
           </div>
+        </div>
+      ) : null}
+
+      {findOpen ? (
+        <div className="flex flex-wrap items-center gap-2 rounded-md border border-[color:var(--line)] bg-[color:var(--panel)] px-3 py-2 shadow-sm">
+          <Search size={16} className="shrink-0 text-[color:var(--text-muted)]" />
+          <input
+            ref={findInputRef}
+            aria-label="Find in sheet"
+            className="focus-ring h-9 min-w-0 flex-1 rounded-md border border-[color:var(--line)] bg-transparent px-3 text-sm"
+            placeholder="Find"
+            type="search"
+            value={findQuery}
+            onChange={(event) => handleFindQueryChange(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                event.preventDefault();
+                moveFindMatch(event.shiftKey ? -1 : 1);
+                return;
+              }
+
+              if (event.key === "Escape") {
+                event.preventDefault();
+                closeFind();
+              }
+            }}
+          />
+          <span className="min-w-12 text-center text-xs font-medium tabular-nums text-[color:var(--text-muted)]">
+            {findStatusLabel}
+          </span>
+          <button
+            aria-label="Previous match"
+            className="focus-ring inline-flex h-9 w-9 items-center justify-center rounded-md border border-[color:var(--line)] text-[color:var(--text)] transition hover:border-[color:var(--accent)] hover:text-[color:var(--accent)] disabled:cursor-not-allowed disabled:opacity-45"
+            disabled={findMatches.length === 0}
+            title="Previous match"
+            type="button"
+            onClick={() => moveFindMatch(-1)}
+          >
+            <ChevronUp size={16} />
+          </button>
+          <button
+            aria-label="Next match"
+            className="focus-ring inline-flex h-9 w-9 items-center justify-center rounded-md border border-[color:var(--line)] text-[color:var(--text)] transition hover:border-[color:var(--accent)] hover:text-[color:var(--accent)] disabled:cursor-not-allowed disabled:opacity-45"
+            disabled={findMatches.length === 0}
+            title="Next match"
+            type="button"
+            onClick={() => moveFindMatch(1)}
+          >
+            <ChevronDown size={16} />
+          </button>
+          <button
+            aria-label="Close find"
+            className="focus-ring inline-flex h-9 w-9 items-center justify-center rounded-md border border-[color:var(--line)] text-[color:var(--text-muted)] transition hover:border-[color:var(--danger)] hover:text-[color:var(--danger)]"
+            title="Close find"
+            type="button"
+            onClick={closeFind}
+          >
+            <X size={16} />
+          </button>
         </div>
       ) : null}
 

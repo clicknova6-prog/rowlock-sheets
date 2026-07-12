@@ -25,6 +25,8 @@
   --grid-duplicate-text: #111827;
   --grid-match-bg: #fecaca;
   --grid-match-text: #7f1d1d;
+  --grid-find-row-overlay: rgba(250, 204, 21, 0.24);
+  --grid-find-cell-outline: rgba(180, 83, 9, 0.9);
   --grid-fill-red-bg: #fee2e2;
   --grid-fill-orange-bg: #ffedd5;
   --grid-fill-yellow-bg: #fef3c7;
@@ -64,6 +66,8 @@
   --grid-duplicate-text: #fef3c7;
   --grid-match-bg: #7f1d1d;
   --grid-match-text: #fee2e2;
+  --grid-find-row-overlay: rgba(234, 179, 8, 0.24);
+  --grid-find-cell-outline: rgba(251, 191, 36, 0.95);
   --grid-fill-red-bg: #4c1d1d;
   --grid-fill-orange-bg: #4a2508;
   --grid-fill-yellow-bg: #422006;
@@ -206,6 +210,29 @@ option {
 
 .sheet-header-column-anchor {
   outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.rdg .rdg-row.sheet-find-row > .rdg-cell {
+  position: relative;
+}
+
+.rdg .rdg-row.sheet-find-row > .rdg-cell::before {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  content: "";
+  background: var(--grid-find-row-overlay);
+}
+
+.rdg .rdg-row.sheet-find-row > .rdg-cell > * {
+  position: relative;
+  z-index: 1;
+}
+
+.sheet-find-active-cell {
+  outline: 2px solid var(--grid-find-cell-outline);
   outline-offset: -2px;
 }
 
