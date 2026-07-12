@@ -3822,6 +3822,19 @@ export function SpreadsheetWorkspace({
         className="h-full w-full border-0 bg-[color:var(--panel)] px-2 text-sm text-[color:var(--text)] outline-none"
         value={value}
         onBlur={() => onClose(true)}
+        onFocus={(event) => {
+          const input = event.currentTarget;
+
+          if (input.dataset.caretInitialized === "true") {
+            return;
+          }
+
+          input.dataset.caretInitialized = "true";
+          requestAnimationFrame(() => {
+            const end = input.value.length;
+            input.setSelectionRange(end, end);
+          });
+        }}
         onChange={(event) => {
           if (isColumnKey(columnKey, snapshot.columns)) {
             onRowChange({ ...row, [columnKey]: event.target.value });
