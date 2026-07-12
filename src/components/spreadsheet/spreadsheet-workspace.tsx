@@ -4,6 +4,7 @@ import {
   type CSSProperties,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -1256,6 +1257,138 @@ function getDemoCellHistory(
       formula: getMetadataString(log.metadata, "formula"),
       createdAt: log.createdAt
     }));
+}
+
+interface SpreadsheetTextInputEditorProps
+  extends RenderEditCellProps<SheetGridRow, SheetGridRow> {
+  columns: ColumnKey[];
+  onMultiCellPaste: (rowIndex: number, columnKey: ColumnKey, clipboardText: string) => void;
+}
+
+function SpreadsheetTextInputEditor({
+  row,
+  column,
+  onRowChange,
+  onClose,
+  columns,
+  onMultiCellPaste
+}: SpreadsheetTextInputEditorProps) {
+  const rawColumnKey = column.key;
+  const columnKey = isColumnKey(rawColumnKey, columns) ? rawColumnKey : null;
+  const activeCellKey = `${row.rowNumber}:${rawColumnKey}`;
+  const initialValue = columnKey ? String(row[columnKey] ?? "") : "";
+  const [draftValue, setDraftValue] = useState(initialValue);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+
+  const updateDraftValue = useCallback((
+    nextValue: string,
+    nextCaretPosition = nextValue.length
+  ): void => {
+    if (!columnKey) {
+      return;
+    }
+
+    setDraftValue(nextValue);
+    onRowChange({ ...row, [columnKey]: nextValue });
+    requestAnimationFrame(() => {
+      inputRef.current?.setSelectionRange(nextCaretPosition, nextCaretPosition);
+    });
+  }, [columnKey, onRowChange, row]);
+
+  const appendIfWholeValueSelected = useCallback((text: string): boolean => {
+    const input = inputRef.current;
+
+    if (!input || !columnKey || input.value.length === 0) {
+      return false;
+    }
+
+    if (input.selectionStart !== 0 || input.selectionEnd !== input.value.length) {
+      return false;
+    }
+
+    updateDraftValue(`${input.value}${text}`);
+    return true;
+  }, [columnKey, updateDraftValue]);
+
+  useLayoutEffect(() => {
+    const input = inputRef.current;
+
+    if (!input) {
+      return;
+    }
+
+    input.focus();
+    const end = input.value.length;
+    input.setSelectionRange(end, end);
+  }, [activeCellKey]);
+
+  return (
+    <input
+      ref={inputRef}
+      className="h-full w-full border-0 bg-[color:var(--panel)] px-2 text-sm text-[color:var(--text)] outline-none"
+      value={draftValue}
+      onBlur={() => onClose(true)}
+      onBeforeInput={(event) => {
+        const nativeEvent = event.nativeEvent as InputEvent;
+
+        if (nativeEvent.inputType !== "insertText" || !nativeEvent.data) {
+          return;
+        }
+
+        if (!appendIfWholeValueSelected(nativeEvent.data)) {
+          return;
+        }
+
+        event.preventDefault();
+        event.stopPropagation();
+      }}
+      onChange={(event) => {
+        if (!columnKey) {
+          return;
+        }
+
+        setDraftValue(event.target.value);
+        onRowChange({ ...row, [columnKey]: event.target.value });
+      }}
+      onKeyDown={(event) => {
+        if (event.key === " " && appendIfWholeValueSelected(" ")) {
+          event.preventDefault();
+          event.stopPropagation();
+          return;
+        }
+
+        if (event.key === "Enter") {
+          onClose(true);
+          return;
+        }
+
+        if (event.key === "Escape") {
+          onClose(false);
+        }
+      }}
+      onPaste={(event) => {
+        if (!columnKey) {
+          return;
+        }
+
+        const clipboardText = event.clipboardData.getData("text/plain");
+
+        if (clipboardText.includes("\t") || clipboardText.includes("\n") || clipboardText.includes("\r")) {
+          event.preventDefault();
+          onClose(false);
+          onMultiCellPaste(row.rowNumber, columnKey, clipboardText);
+          return;
+        }
+
+        if (!appendIfWholeValueSelected(clipboardText)) {
+          return;
+        }
+
+        event.preventDefault();
+        event.stopPropagation();
+      }}
+    />
+  );
 }
 
 export function SpreadsheetWorkspace({
@@ -3810,92 +3943,24 @@ export function SpreadsheetWorkspace({
   const SpreadsheetTextEditor = useCallback(function SpreadsheetTextEditor({
     row,
     column,
+    rowIdx,
     onRowChange,
     onClose
   }: RenderEditCellProps<SheetGridRow, SheetGridRow>) {
-    const columnKey = column.key;
-    const value = isColumnKey(columnKey, snapshot.columns) ? String(row[columnKey] ?? "") : "";
-
     return (
-      <input
-        autoFocus
-        className="h-full w-full border-0 bg-[color:var(--panel)] px-2 text-sm text-[color:var(--text)] outline-none"
-        value={value}
-        onBlur={() => onClose(true)}
-        onFocus={(event) => {
-          const input = event.currentTarget;
-
-          if (input.dataset.caretInitialized === "true") {
-            return;
-          }
-
-          input.dataset.caretInitialized = "true";
-          requestAnimationFrame(() => {
-            const end = input.value.length;
-            input.setSelectionRange(end, end);
-          });
-        }}
-        onChange={(event) => {
-          if (isColumnKey(columnKey, snapshot.columns)) {
-            onRowChange({ ...row, [columnKey]: event.target.value });
-          }
-        }}
-        onKeyDown={(event) => {
-          if (event.key === "Enter") {
-            onClose(true);
-          }
-
-          if (event.key === "Escape") {
-            onClose(false);
-          }
-
-          if (
-            event.key === " " &&
-            value.length > 0 &&
-            event.currentTarget.selectionStart === 0 &&
-            event.currentTarget.selectionEnd === value.length &&
-            isColumnKey(columnKey, snapshot.columns)
-          ) {
-            const nextValue = `${value} `;
-            event.preventDefault();
-            onRowChange({ ...row, [columnKey]: nextValue });
-            requestAnimationFrame(() => {
-              event.currentTarget.setSelectionRange(nextValue.length, nextValue.length);
-            });
-          }
-        }}
-        onPaste={(event) => {
-          if (!isColumnKey(columnKey, snapshot.columns)) {
-            return;
-          }
-
-          const clipboardText = event.clipboardData.getData("text/plain");
-
-          if (!clipboardText.includes("\t") && !clipboardText.includes("\n") && !clipboardText.includes("\r")) {
-            const input = event.currentTarget;
-            const selectionStart = input.selectionStart ?? value.length;
-            const selectionEnd = input.selectionEnd ?? value.length;
-            const replacingWholeValue =
-              value.length > 0 && selectionStart === 0 && selectionEnd === value.length;
-            const insertAt = replacingWholeValue ? value.length : selectionStart;
-            const removeUntil = replacingWholeValue ? value.length : selectionEnd;
-            const nextValue = `${value.slice(0, insertAt)}${clipboardText}${value.slice(removeUntil)}`;
-
-            event.preventDefault();
-            onRowChange({ ...row, [columnKey]: nextValue });
-            requestAnimationFrame(() => {
-              const caret = insertAt + clipboardText.length;
-              input.setSelectionRange(caret, caret);
-            });
-            return;
-          }
-
-          event.preventDefault();
-          onClose(false);
+      <SpreadsheetTextInputEditor
+        key={`${row.rowNumber}:${column.key}`}
+        column={column}
+        columns={snapshot.columns}
+        row={row}
+        rowIdx={rowIdx}
+        onClose={onClose}
+        onMultiCellPaste={(rowIndex, columnKey, clipboardText) => {
           startTransition(() => {
-            void applyPastedText(row.rowNumber, columnKey, clipboardText);
+            void applyPastedText(rowIndex, columnKey, clipboardText);
           });
         }}
+        onRowChange={onRowChange}
       />
     );
   }, [applyPastedText, snapshot.columns, startTransition]);
