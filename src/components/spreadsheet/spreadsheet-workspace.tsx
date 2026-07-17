@@ -60,7 +60,11 @@ import type { ColumnKey } from "@/lib/constants";
 import { useSheet } from "@/hooks/useSheet";
 import { useSheetPresence } from "@/hooks/useSheetPresence";
 import { useSheetRealtime } from "@/hooks/useSheetRealtime";
-import { FORMAT_COLOR_PALETTE, createDefaultCellFormat } from "@/lib/sheet/formatting";
+import {
+  FORMAT_COLOR_PALETTE,
+  MIN_SHEET_COLUMN_WIDTH,
+  createDefaultCellFormat
+} from "@/lib/sheet/formatting";
 import { getCellEditDecision } from "@/lib/sheet/permissions";
 import { parseRowIndexList } from "@/lib/sheet/row-index-list";
 import type { SheetRealtimeEvent } from "@/lib/sheet/realtime-types";
@@ -478,7 +482,7 @@ function createColumnWidthsFromViewSetting(
     if (Number.isFinite(numericWidth) && numericWidth > 0) {
       columnWidths.set(columnKey, {
         type: "resized",
-        width: Math.round(numericWidth)
+        width: Math.max(MIN_SHEET_COLUMN_WIDTH, Math.round(numericWidth))
       });
     }
   }
@@ -496,11 +500,28 @@ function serializeColumnWidths(
     const width = Number(widths.get(columnKey)?.width);
 
     if (Number.isFinite(width) && width > 0) {
-      serialized[columnKey] = Math.round(width);
+      serialized[columnKey] = Math.max(MIN_SHEET_COLUMN_WIDTH, Math.round(width));
     }
   }
 
   return serialized;
+}
+
+function clampColumnWidths(widths: ColumnWidths): ColumnWidths {
+  const clampedWidths = new Map<string, ColumnWidth>();
+
+  for (const [columnKey, columnWidth] of widths) {
+    const width = Number(columnWidth.width);
+
+    clampedWidths.set(columnKey, {
+      ...columnWidth,
+      width: Number.isFinite(width)
+        ? Math.max(MIN_SHEET_COLUMN_WIDTH, Math.round(width))
+        : MIN_SHEET_COLUMN_WIDTH
+    });
+  }
+
+  return clampedWidths;
 }
 
 function getSelectionEdgeVelocity(distance: number): number {
@@ -1819,7 +1840,9 @@ export function SpreadsheetWorkspace({
     );
   }, [selectedAdminColumnKey, updateViewSetting]);
   const handleColumnWidthsChange = useCallback((nextColumnWidths: ColumnWidths): void => {
-    setColumnWidths(nextColumnWidths);
+    const clampedColumnWidths = clampColumnWidths(nextColumnWidths);
+
+    setColumnWidths(clampedColumnWidths);
 
     if (columnWidthSaveTimerRef.current) {
       clearTimeout(columnWidthSaveTimerRef.current);
@@ -1830,7 +1853,7 @@ export function SpreadsheetWorkspace({
       return;
     }
 
-    const serializedWidths = serializeColumnWidths(nextColumnWidths, snapshot.columns);
+    const serializedWidths = serializeColumnWidths(clampedColumnWidths, snapshot.columns);
 
     columnWidthSaveTimerRef.current = setTimeout(() => {
       columnWidthSaveTimerRef.current = null;
@@ -4293,7 +4316,7 @@ export function SpreadsheetWorkspace({
           name: columnKey,
           frozen: isPinnedHeaderRegionColumn,
           width: DEFAULT_DATA_COLUMN_WIDTH,
-          minWidth: 1,
+          minWidth: MIN_SHEET_COLUMN_WIDTH,
           resizable: true,
           editable: (row: SheetGridRow) =>
             row.__editable[columnKey] &&

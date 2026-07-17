@@ -37,7 +37,7 @@ const HEX_COLOR_PATTERN = /^#[0-9a-f]{6}$/i;
 const HORIZONTAL_ALIGNMENTS = ["left", "center", "right"] as const;
 const MIN_SHEET_FONT_SIZE = 8;
 const MAX_SHEET_FONT_SIZE = 36;
-const MIN_COLUMN_WIDTH = 1;
+export const MIN_SHEET_COLUMN_WIDTH = 72;
 const MAX_COLUMN_WIDTH = 5000;
 
 export function createDefaultCellFormat(): CellFormatState {
@@ -91,7 +91,7 @@ export function normalizeSheetColumnWidths(
     if (Number.isFinite(width)) {
       widths[columnKey] = Math.min(
         MAX_COLUMN_WIDTH,
-        Math.max(MIN_COLUMN_WIDTH, Math.round(width))
+        Math.max(MIN_SHEET_COLUMN_WIDTH, Math.round(width))
       );
     }
   }
